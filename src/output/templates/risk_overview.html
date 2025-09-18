@@ -1,0 +1,19 @@
+<div class="section">
+    <div class="section-header">Risk Overview</div>
+    <div class="section-content">
+        <h3>Overall Risk Score</h3>
+        <div class="progress-bar">
+            <div class="progress-fill" data-width="{{ risk_percentage }}%" style="width: 0;"></div>
+        </div>
+        <p>Risk Score: {{ overall_risk | round(precision=1) }}/10.0 ({{ risk_percentage }}%)</p>
+
+        <div style="margin-top: 1rem;">
+            <h4>Risk Factors:</h4>
+            <ul>
+                <li>Single Author Files: {{ findings.git_stats.single_author_files | length }} ({{ single_author_percentage | round(precision=1) }}%)</li>
+                <li>Stale Files: {{ findings.git_stats.stale_files | length }} ({{ stale_files_percentage | round(precision=1) }}%)</li>
+                <li>High Complexity Files: {{ high_complexity_count }}</li>
+            </ul>
+        </div>
+    </div>
+</div>

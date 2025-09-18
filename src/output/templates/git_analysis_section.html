@@ -1,0 +1,65 @@
+<div class="section">
+    <div class="section-header">Git Analysis</div>
+    <div class="section-content">
+        <!-- Repository timeline -->
+        <p><strong>Repository Timeline:</strong> {{ findings.git_stats.first_commit | date(format="%Y-%m-%d") }} to {{ findings.git_stats.last_commit | date(format="%Y-%m-%d") }}</p>
+
+        <!-- Top contributors -->
+        <h3>Top Contributors</h3>
+        <table>
+            <tr><th>Author</th><th>Commits</th><th>Files Touched</th><th>Last Activity</th></tr>
+            {% for contributor in top_contributors %}
+                <tr>
+                    <td>{{ contributor.1.name }}</td>
+                    <td>{{ contributor.1.commits }}</td>
+                    <td>{{ contributor.1.files_touched | length }}</td>
+                    <td>{{ contributor.1.last_commit | date(format="%Y-%m-%d") }}</td>
+                </tr>
+            {% endfor %}
+        </table>
+
+        <!-- Single Author Files -->
+        {% if findings.git_stats.single_author_files | length > 0 %}
+            <h3>Single Author Files ({{ findings.git_stats.single_author_files | length }} total)</h3>
+
+            {% if single_author_extensions | length > 0 %}
+                <h4>File Types Distribution:</h4>
+                <table style="margin-bottom: 1rem;">
+                    <tr><th>Extension</th><th>Count</th><th>Percentage</th></tr>
+                    {% for ext_data in single_author_extensions | slice(end=10) %}
+                        <tr>
+                            <td><code>.{{ ext_data.extension }}</code></td>
+                            <td>{{ ext_data.count }}</td>
+                            <td>{{ ext_data.percentage | round(precision=1) }}%</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+
+            <div class="file-list">
+                {% for file in single_author_files %}
+                    <span class="file-tag">{{ file }}</span>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <!-- Stale Files -->
+        {% if findings.git_stats.stale_files | length > 0 %}
+            <h3>Stale Files ({{ findings.git_stats.stale_files | length }} total)</h3>
+
+            {% if stale_files_extensions | length > 0 %}
+                <h4>File Types Distribution:</h4>
+                <table style="margin-bottom: 1rem;">
+                    <tr><th>Extension</th><th>Count</th><th>Percentage</th></tr>
+                    {% for ext_data in stale_files_extensions | slice(end=10) %}
+                        <tr>
+                            <td><code>.{{ ext_data.extension }}</code></td>
+                            <td>{{ ext_data.count }}</td>
+                            <td>{{ ext_data.percentage | round(precision=1) }}%</td>
+                        </tr>
+                    {% endfor %}
+                </table>
+            {% endif %}
+        {% endif %}
+    </div>
+</div>

@@ -1,0 +1,120 @@
+<div class="section">
+    <div class="section-header">Priority Areas - Files with Most Findings</div>
+    <div class="section-content">
+        {% if priority_areas | length == 0 %}
+            <p>No vulnerability findings identified in files. Great work!</p>
+        {% else %}
+            <div class="priority-controls">
+                <div class="search-controls">
+                    <input type="text" id="prioritySearch" placeholder="Search files or findings..." onkeyup="searchPriorityAreas()">
+                    <select id="prioritySort" onchange="sortPriorityAreas()">
+                        <option value="priority-desc">Sort by Priority (High to Low)</option>
+                        <option value="findings-desc">Sort by Total Findings</option>
+                        <option value="critical-desc">Sort by Critical Findings</option>
+                        <option value="name-asc">Sort by File Name (A-Z)</option>
+                    </select>
+                </div>
+                <div class="pagination-info">
+                    <span id="priorityPaginationInfo">Showing 1-25 of {{ priority_areas | length }} files</span>
+                </div>
+            </div>
+            <div class="file-findings-list" id="priorityAreasList">
+                {% for file_data in priority_areas %}
+                    <div class="file-findings-item priority-area-item"
+                         data-filename="{{ file_data.file | lower }}"
+                         data-total-findings="{{ file_data.total_findings }}"
+                         data-critical-findings="{{ file_data.high_risk_findings }}"
+                         data-medium-findings="{{ file_data.medium_risk_findings }}"
+                         data-low-findings="{{ file_data.low_risk_findings }}">
+                        <div class="file-header">
+                            {% if file_data.file_url and file_data.file_url != 'null' %}
+                                <h4><a href="{{ file_data.file_url }}" target="_blank" class="file-link">{{ file_data.file }}</a></h4>
+                            {% else %}
+                                <h4><code>{{ file_data.file }}</code></h4>
+                            {% endif %}
+                            <span class="total-findings-badge">{{ file_data.total_findings }} findings</span>
+                        </div>
+
+                        <div class="findings-breakdown">
+                            {% if file_data.high_risk_findings > 0 %}
+                                <span class="finding-badge high-risk">{{ file_data.high_risk_findings }} critical</span>
+                            {% endif %}
+                            {% if file_data.medium_risk_findings > 0 %}
+                                <span class="finding-badge medium-risk">{{ file_data.medium_risk_findings }} medium</span>
+                            {% endif %}
+                            {% if file_data.low_risk_findings > 0 %}
+                                <span class="finding-badge low-risk">{{ file_data.low_risk_findings }} low</span>
+                            {% endif %}
+                        </div>
+
+                        {% if file_data.commit_id_short %}
+                            <div class="commit-info">
+                                <small>
+                                    Recent change:
+                                    {% if file_data.commit_url %}
+                                        <a href="{{ file_data.commit_url }}" target="_blank" class="commit-link">{{ file_data.commit_id_short }}</a>
+                                    {% else %}
+                                        <code>{{ file_data.commit_id_short }}</code>
+                                    {% endif %}
+                                </small>
+                            </div>
+                        {% endif %}
+
+                        <div class="file-expand-controls">
+                            <button class="expand-button" onclick="toggleFileFindings('priority-file-{{ loop.index0 }}')">
+                                <span class="expand-icon">▼</span> Show {{ file_data.total_findings }} findings
+                            </button>
+                        </div>
+
+                        <div id="priority-file-{{ loop.index0 }}" class="file-findings-details" style="display: none;">
+                            {% for finding in file_data.findings %}
+                                <div class="finding-item {{ finding.severity_class }}">
+                                    <div class="finding-header">
+                                        <div class="finding-title">
+                                            <strong>{{ finding.commit_message }}</strong>
+                                            <span class="risk-score {{ finding.severity_class }}">{{ finding.risk_score | round(precision=1) }}</span>
+                                        </div>
+                                        <div class="finding-meta">
+                                            {% if finding.commit_url %}
+                                                <a href="{{ finding.commit_url }}" target="_blank" class="commit-info">{{ finding.commit_id_short }}</a>
+                                            {% else %}
+                                                <span class="commit-info">{{ finding.commit_id_short }}</span>
+                                            {% endif %}
+                                            {% if finding.diff_url %}
+                                                • <a href="{{ finding.diff_url }}" target="_blank" style="font-size: 0.8em;">view diff</a>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                    <div class="finding-details">
+                                        <p><strong>Author:</strong> {{ finding.author }}</p>
+                                        <p><strong>Date:</strong> {{ finding.date | date(format="%Y-%m-%d %H:%M:%S UTC") }}</p>
+                                        {% if finding.patterns_matched | length > 0 %}
+                                            <p><strong>Patterns Matched:</strong></p>
+                                            <ul>
+                                                {% for pattern in finding.patterns_matched %}
+                                                    <li>{{ pattern.pattern_name }}</li>
+                                                {% endfor %}
+                                            </ul>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <div class="pagination-controls">
+                <button id="priorityPrevBtn" onclick="changePriorityPage(-1)" disabled>Previous</button>
+                <span id="priorityPageInfo">Page 1 of 1</span>
+                <button id="priorityNextBtn" onclick="changePriorityPage(1)" disabled>Next</button>
+                <select id="priorityPageSize" onchange="changePriorityPageSize()">
+                    <option value="10">10 per page</option>
+                    <option value="25" selected>25 per page</option>
+                    <option value="50">50 per page</option>
+                    <option value="all">Show all</option>
+                </select>
+            </div>
+        {% endif %}
+    </div>
+</div>

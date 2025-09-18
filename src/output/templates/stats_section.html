@@ -1,0 +1,31 @@
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value">{{ findings.git_stats.total_commits }}</div>
+        <div class="stat-label">Total Commits</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-value">{{ findings.git_stats.total_files }}</div>
+        <div class="stat-label">Total Files</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-value">{{ findings.git_stats.total_authors }}</div>
+        <div class="stat-label">Contributors</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-value">{{ findings.vulnerabilities | length }}</div>
+        <div class="stat-label">Vulnerabilities Found</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-value">{{ overall_risk | round(precision=1) }}</div>
+        <div class="stat-label">Risk Score</div>
+    </div>
+
+    <div class="stat-card">
+        <div class="stat-value">{{ findings.code_stats.total_lines }}</div>
+        <div class="stat-label">Lines of Code</div>
+    </div>
+</div>

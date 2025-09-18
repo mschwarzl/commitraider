@@ -1,0 +1,72 @@
+<div class="section">
+    <div class="section-header">Test Analysis</div>
+    <div class="section-content">
+        <div class="stats-row">
+            <div class="stat-item">
+                <span class="stat-number">{{ test_analysis.total_test_files }}</span>
+                <span class="stat-desc">Test Files</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-number">{{ test_analysis.test_directories | length }}</span>
+                <span class="stat-desc">Test Directories</span>
+            </div>
+            <div class="stat-item">
+                <span class="stat-number">{{ test_analysis.test_frameworks | length }}</span>
+                <span class="stat-desc">Test Frameworks</span>
+            </div>
+            <div class="stat-item">
+                {% if test_analysis.has_regression_tests %}
+                    <span class="stat-number" style="color: #28a745;">Yes</span>
+                    <span class="stat-desc">Regression Tests Found</span>
+                {% else %}
+                    <span class="stat-number" style="color: #dc3545;">No</span>
+                    <span class="stat-desc">No Regression Tests</span>
+                {% endif %}
+            </div>
+        </div>
+
+        {% if test_analysis.test_directories | length > 0 %}
+            <h4>Test Directories:</h4>
+            <div class="file-list">
+                {% for dir in test_analysis.test_directories %}
+                    <span class="file-tag">{{ dir }}</span>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if test_analysis.test_frameworks | length > 0 %}
+            <h4>Test Frameworks Detected:</h4>
+            <div class="file-list">
+                {% for framework in test_analysis.test_frameworks %}
+                    <span class="file-tag">{{ framework }}</span>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if test_analysis.has_regression_tests and test_analysis.test_patterns_found | length > 0 %}
+            <h4>Regression Test Indicators:</h4>
+            <ul>
+                {% for pattern in test_analysis.test_patterns_found %}
+                    <li>{{ pattern }}</li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+
+        {% if test_analysis.test_coverage_indicators | length > 0 %}
+            <h4>Coverage Tools Detected:</h4>
+            <div class="file-list">
+                {% for tool in test_analysis.test_coverage_indicators %}
+                    <span class="file-tag">{{ tool }}</span>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if not test_analysis.has_regression_tests %}
+            <div class="risk-factor high" style="margin-top: 1rem;">
+                <h4>Recommendation: Add Regression Tests</h4>
+                <p>No regression tests were detected in this repository. Consider adding tests that specifically verify bug fixes and prevent regressions.</p>
+                <p><strong>Benefits:</strong> Early detection of reintroduced bugs, improved code quality, better release confidence.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>

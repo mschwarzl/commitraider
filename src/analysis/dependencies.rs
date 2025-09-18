@@ -1,0 +1,1 @@
+// Dependency analysis utilities - placeholder

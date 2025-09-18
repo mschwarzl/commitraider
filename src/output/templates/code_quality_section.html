@@ -1,0 +1,103 @@
+<div class="section">
+    <div class="section-header">Code Quality Analysis</div>
+    <div class="section-content">
+        {% if findings.code_stats.language_breakdown %}
+        <h3>Language Distribution</h3>
+        <table>
+            <tr><th>Language</th><th>Files</th><th>Lines</th><th>Percentage</th></tr>
+            {% for lang_name, lang_stats in findings.code_stats.language_breakdown %}
+                {% set percentage = lang_stats.lines / findings.code_stats.total_lines * 100.0 %}
+                <tr>
+                    <td>{{ lang_stats.name }}</td>
+                    <td>{{ lang_stats.files }}</td>
+                    <td>{{ lang_stats.lines }}</td>
+                    <td>{{ percentage | round(precision=1) }}%</td>
+                </tr>
+            {% endfor %}
+        </table>
+        {% else %}
+        <p>No language data available.</p>
+        {% endif %}
+
+        <h3>Complexity Analysis</h3>
+        {% if all_complexity_files | length > 0 %}
+            <div class="complexity-controls">
+                <div class="search-controls">
+                    <input type="text" id="complexitySearch" placeholder="Search files..." onkeyup="searchComplexityFiles()">
+                    <select id="complexityFilenameFilter" onchange="filterComplexityFiles()">
+                        <option value="all">All File Types</option>
+                    </select>
+                    <select id="complexitySort" onchange="sortComplexityFiles()">
+                        <option value="complexity-desc">Sort by Cyclomatic Complexity (High to Low)</option>
+                        <option value="complexity-asc">Sort by Cyclomatic Complexity (Low to High)</option>
+                        <option value="cognitive-desc">Sort by Cognitive Complexity (High to Low)</option>
+                        <option value="cognitive-asc">Sort by Cognitive Complexity (Low to High)</option>
+                        <option value="maintainability-desc">Sort by Maintainability (High to Low)</option>
+                        <option value="maintainability-asc">Sort by Maintainability (Low to High)</option>
+                        <option value="functions-desc">Sort by Functions (High to Low)</option>
+                        <option value="lines-desc">Sort by Lines (High to Low)</option>
+                        <option value="name-asc">Sort by Name (A-Z)</option>
+                        <option value="name-desc">Sort by Name (Z-A)</option>
+                    </select>
+                </div>
+                <div class="pagination-info">
+                    <span id="complexityPaginationInfo">Showing 1-50 of {{ all_complexity_files | length }} files</span>
+                </div>
+            </div>
+
+            <table id="complexityTable">
+                <thead>
+                    <tr>
+                        <th>File</th>
+                        <th>Cyclomatic Complexity</th>
+                        <th>Cognitive Complexity</th>
+                        <th>Functions</th>
+                        <th>Lines</th>
+                        <th>Maintainability</th>
+                    </tr>
+                </thead>
+                <tbody id="complexityTableBody">
+                    {% for complexity_item in all_complexity_files %}
+                        <tr class="complexity-row"
+                            data-filename="{{ complexity_item.0 | lower }}"
+                            data-complexity="{{ complexity_item.1.cyclomatic_complexity }}"
+                            data-cognitive="{{ complexity_item.1.cognitive_complexity }}"
+                            data-functions="{{ complexity_item.1.function_count }}"
+                            data-lines="{{ complexity_item.1.line_count }}"
+                            data-maintainability="{{ complexity_item.1.maintainability_index }}">
+                            <td><code>{{ complexity_item.0 }}</code></td>
+                            <td class="complexity-value">
+                                {{ complexity_item.1.cyclomatic_complexity | round(precision=1) }}
+                            </td>
+                            <td class="cognitive-complexity">
+                                {{ complexity_item.1.cognitive_complexity | round(precision=1) }}
+                            </td>
+                            <td>{{ complexity_item.1.function_count }}</td>
+                            <td>{{ complexity_item.1.line_count }}</td>
+                            <td class="maintainability-index">
+                                <div class="maintainability-bar">
+                                    <div class="maintainability-fill" style="width: {{ complexity_item.1.maintainability_index }}%"></div>
+                                    <span>{{ complexity_item.1.maintainability_index | round(precision=0) }}%</span>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+
+            <div class="pagination-controls">
+                <button id="complexityPrevBtn" onclick="changeComplexityPage(-1)" disabled>Previous</button>
+                <span id="complexityPageInfo">Page 1 of 1</span>
+                <button id="complexityNextBtn" onclick="changeComplexityPage(1)" disabled>Next</button>
+                <select id="complexityPageSize" onchange="changeComplexityPageSize()">
+                    <option value="25">25 per page</option>
+                    <option value="50" selected>50 per page</option>
+                    <option value="100">100 per page</option>
+                    <option value="all">Show all</option>
+                </select>
+            </div>
+        {% else %}
+            <p>No complexity data available.</p>
+        {% endif %}
+    </div>
+</div>

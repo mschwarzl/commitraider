@@ -1,0 +1,76 @@
+<div class="section">
+    <div class="section-header">Commit Heatmap</div>
+    <div class="section-content">
+        <p>Files colored by commit frequency - darker colors indicate more changes (higher risk):</p>
+
+        <!-- Create heatmap legend -->
+        <div class="heatmap-legend">
+            <span>Few commits</span>
+            <div class="legend-scale">
+                <div class="legend-color commits-0"></div>
+                <div class="legend-color commits-1"></div>
+                <div class="legend-color commits-2"></div>
+                <div class="legend-color commits-3"></div>
+                <div class="legend-color commits-4"></div>
+                <div class="legend-color commits-high"></div>
+            </div>
+            <span>Many commits</span>
+        </div>
+
+        <!-- File extension filter -->
+        <div class="heatmap-filters">
+            <label for="extension-filter">Filter by file extension:</label>
+            <select id="extension-filter">
+                <option value="all">All files</option>
+            </select>
+        </div>
+
+        <div class="heatmap-container">
+            <div class="heatmap-grid">
+                {% for file_data in heatmap_files %}
+                    <div class="heatmap-cell {{ file_data.css_class }}"
+                         data-file="{{ file_data.path }}"
+                         data-commits="{{ file_data.commit_count }}"
+                         data-extension="{{ file_data.extension }}"
+                         data-authors="{{ file_data.authors | default(value='Unknown') }}"
+                         data-last-modified="{{ file_data.last_modified | default(value='Unknown') }}"
+                         data-file-url="{{ file_data.file_url }}"
+                         title="{{ file_data.path }}: {{ file_data.commit_count }} commits">
+                        <div class="cell-label">{{ file_data.display_name }}</div>
+                        <div class="cell-count">{{ file_data.commit_count }}</div>
+                    </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <!-- Add statistics summary -->
+        <div class="heatmap-stats">
+            <h4>File Change Statistics:</h4>
+            <div class="stats-row">
+                <div class="stat-item">
+                    <span class="stat-number">{{ heatmap_stats.high_churn_files }}</span>
+                    <span class="stat-desc">High-churn files ({{ heatmap_stats.threshold_4 }}+ commits)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ heatmap_stats.medium_churn_files }}</span>
+                    <span class="stat-desc">Medium-churn files ({{ heatmap_stats.threshold_2 }}-{{ heatmap_stats.threshold_4 }} commits)</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-number">{{ heatmap_stats.low_churn_files }}</span>
+                    <span class="stat-desc">Low-churn files (1-{{ heatmap_stats.threshold_2 }} commits)</span>
+                </div>
+            </div>
+        </div>
+
+        {% if heatmap_files | length > 0 %}
+            <div class="top-files">
+                <h4>Most Changed Files:</h4>
+                <ol>
+                    {% for file_data in heatmap_files | slice(end=10) %}
+                        <li><code>{{ file_data.path }}</code> - {{ file_data.commit_count }} commits</li>
+                    {% endfor %}
+                </ol>
+            </div>
+        {% endif %}
+    </div>
+</div>

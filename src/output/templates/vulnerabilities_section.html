@@ -1,0 +1,89 @@
+<div class="section">
+    <div class="section-header">{% if cve_only %}CVE References{% else %}Security Vulnerabilities{% endif %} ({{ filtered_vulnerabilities | length }} found)</div>
+    <div class="section-content">
+        {% if filtered_vulnerabilities | length == 0 %}
+            <p>No vulnerabilities found matching the criteria.</p>
+        {% else %}
+            <!-- Search and filter controls -->
+            <div class="search-container">
+                <div class="search-box">
+                    <input type="text"
+                           class="search-input"
+                           id="vulnerability-search"
+                           placeholder="Search vulnerabilities by message, author, file, or CVE...">
+
+                    <div class="search-filters">
+                        <select class="filter-select" id="severity-filter">
+                            <option value="">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
+                            <option value="low">Low</option>
+                            <option value="info">Info</option>
+                        </select>
+
+                        <select class="filter-select" id="author-filter">
+                            <option value="">All Authors</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="search-stats" id="search-stats">
+                    Showing all vulnerabilities
+                </div>
+            </div>
+
+            <!-- Results info and sorting -->
+            <div class="results-info" id="results-info">
+                <div class="results-count" id="results-count">
+                    Loading results...
+                </div>
+
+                <div class="sort-controls">
+                    <label for="sort-select">Sort by:</label>
+                    <select class="sort-select" id="sort-select">
+                        <option value="risk-desc">Risk Score (High to Low)</option>
+                        <option value="risk-asc">Risk Score (Low to High)</option>
+                        <option value="date-desc">Date (Newest First)</option>
+                        <option value="date-asc">Date (Oldest First)</option>
+                        <option value="author">Author (A-Z)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Container for vulnerabilities (will be filtered/paginated) -->
+            <div id="vulnerabilities-container">
+                {% for vuln in filtered_vulnerabilities %}
+                    <div class="vulnerability-item-wrapper"
+                         data-index="{{ loop.index0 }}"
+                         data-severity="{{ vuln.severity_text }}"
+                         data-author="{{ vuln.author | lower }}"
+                         data-message="{{ vuln.commit_message | lower }}"
+                         data-files="{{ vuln.files_changed | join(sep=' ') | lower }}"
+                         data-risk-score="{{ vuln.risk_score | round(precision=2) }}"
+                         data-date="{{ vuln.date }}">
+                        {% include "vulnerability_item.html" %}
+                    </div>
+                {% endfor %}
+            </div>
+
+            <!-- Pagination controls -->
+            <div class="pagination-container" id="pagination-container">
+                <div class="pagination-info" id="pagination-info">
+                    Page 1 of 1
+                </div>
+
+                <ul class="pagination" id="pagination">
+                    <li><button id="prev-page" disabled>&laquo; Previous</button></li>
+                    <li><button id="next-page" disabled>Next &raquo;</button></li>
+                </ul>
+            </div>
+
+            <!-- No results message (hidden by default) -->
+            <div class="no-results" id="no-results" style="display: none;">
+                <h3>No vulnerabilities match your search</h3>
+                <p>Try adjusting your search terms or filters.</p>
+            </div>
+        {% endif %}
+    </div>
+</div>
