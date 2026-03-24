@@ -14,6 +14,7 @@ mod patterns;
 use analysis::CodeAnalyzer;
 use config::Config;
 use git::GitAnalyzer;
+use output::agent::AgentReport;
 use output::Reporter;
 use patterns::PatternEngine;
 
@@ -28,13 +29,13 @@ struct Cli {
     #[arg(short, long, default_value = "vuln")]
     patterns: String,
 
-    /// Output format (html, json)
+    /// Output format (html, json, agent-json)
     #[arg(short, long, default_value = "html")]
     output: String,
 
-    /// Output file (report.html|json)
-    #[arg(long, default_value = "report_commit_raider")]
-    output_file: String,
+    /// Output file (report.html|json). If not specified, agent-json outputs to stdout
+    #[arg(long)]
+    output_file: Option<String>,
 
     /// Show only CVE references
     #[arg(short, long)]
@@ -55,13 +56,37 @@ struct Cli {
     /// Number of threads for Rayon parallel vulnerability scanning (0 = auto-detect CPU cores)
     #[arg(short, long, default_value = "0")]
     threads: usize,
+
+    /// Maximum number of findings and risk files to include in agent-json output
+    #[arg(long, default_value = "50")]
+    top_n: usize,
+
+    /// Output the JSON schema for agent-json format and exit
+    #[arg(long)]
+    output_schema: bool,
+
+    /// Use ultra-compact agent-json output (<30k chars). Only applies to --output agent-json
+    #[arg(long)]
+    compact: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // Handle schema output before CLI parsing (so --repo isn't required)
+    let args: Vec<String> = std::env::args().collect();
+    if args.contains(&"--output-schema".to_string()) {
+        AgentReport::print_schema();
+        return Ok(());
+    }
+
+    // Now parse CLI normally
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Initialize logging
+    // Initialize logging to stderr so stdout stays clean for data output
     let level = if cli.verbose {
         Level::DEBUG
     } else {
@@ -70,6 +95,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_max_level(level)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .init();
 
     if cli.threads > 0 {
@@ -78,23 +104,29 @@ async fn main() -> Result<()> {
             .build_global()?;
     }
 
-    println!(
-        "{}",
-        "CommitRaider - Git History Security Scanner"
-            .bright_cyan()
-            .bold()
-    );
-    println!(
-        "Repository: {}",
-        cli.repo.display().to_string().bright_white()
-    );
+    // Skip banner for agent-json when outputting to stdout (for clean piping)
+    let skip_banner = matches!(cli.output.as_str(), "agent-json" | "agent") 
+        && cli.output_file.is_none();
+    
+    if !skip_banner {
+        println!(
+            "{}",
+            "CommitRaider - Git History Security Scanner"
+                .bright_cyan()
+                .bold()
+        );
+        println!(
+            "Repository: {}",
+            cli.repo.display().to_string().bright_white()
+        );
+    }
 
     let config = Config::load()?;
     let pattern_engine = PatternEngine::new(&cli.patterns)?;
 
     let git_analyzer = GitAnalyzer::new(&cli.repo)?;
     let code_analyzer = CodeAnalyzer::new();
-    let mut reporter = Reporter::new(&cli.output, &cli.output_file)?;
+    let mut reporter = Reporter::new(&cli.output, cli.output_file.as_deref())?;
 
     info!("Starting repository analysis...");
 
@@ -128,10 +160,13 @@ async fn main() -> Result<()> {
     };
 
     reporter
-        .generate_report(&findings, cli.cve_only, cli.stats)
+        .generate_report(&findings, cli.cve_only, cli.stats, cli.top_n, cli.compact)
         .await?;
 
-    println!("\n{}", "Analysis complete!".bright_green().bold());
+    // Skip completion message for agent-json when outputting to stdout
+    if !skip_banner {
+        println!("\n{}", "Analysis complete!".bright_green().bold());
+    }
 
     Ok(())
 }

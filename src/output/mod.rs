@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
+pub mod agent;
 pub mod html;
 pub mod reporter;
 pub mod sarif;
@@ -13,6 +14,7 @@ use crate::analysis::CombinedFindings;
 pub enum OutputFormat {
     Json,
     Html,
+    AgentJson,
 }
 
 impl From<&str> for OutputFormat {
@@ -20,6 +22,7 @@ impl From<&str> for OutputFormat {
         match s.to_lowercase().as_str() {
             "json" => OutputFormat::Json,
             "html" => OutputFormat::Html,
+            "agent-json" | "agent" => OutputFormat::AgentJson,
             _ => OutputFormat::Html,
         }
     }
@@ -29,6 +32,7 @@ pub fn add_file_extension(path: &str, format: &OutputFormat) -> String {
     let extension = match format {
         OutputFormat::Html => ".html",
         OutputFormat::Json => ".json",
+        OutputFormat::AgentJson => ".agent.json",
     };
 
     if path.ends_with(extension) {
