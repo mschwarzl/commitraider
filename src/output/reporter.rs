@@ -65,7 +65,7 @@ impl Reporter {
             }
             OutputFormat::AgentJson => {
                 let content = if compact {
-                    // Use ultra-compact format (<30k chars)
+                    // Use ultra-compact format 
                     let compact_report = CompactAgentReport::from_combined_findings(findings);
                     compact_report.generate_json()?
                 } else {

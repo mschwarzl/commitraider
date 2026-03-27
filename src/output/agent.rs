@@ -38,7 +38,6 @@ pub const JSON_SCHEMA: &str = r#"{
       "required": ["path", "repository_type", "total_commits", "total_files", "total_authors", "first_commit", "last_commit", "branches"],
       "properties": {
         "path": { "type": "string" },
-        "remote_url": { "type": ["string", "null"] },
         "repository_type": { "type": "string", "enum": ["GitHub", "GitLab", "Bitbucket", "Other", "Local"] },
         "total_commits": { "type": "integer", "minimum": 0 },
         "total_files": { "type": "integer", "minimum": 0 },
@@ -199,7 +198,6 @@ pub struct AgentReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RepositorySummary {
     pub path: String,
-    pub remote_url: Option<String>,
     pub repository_type: String,
     pub total_commits: usize,
     pub total_files: usize,
@@ -286,7 +284,7 @@ pub struct VulnerablePackage {
     pub severity: String,
 }
 
-// Compact structs for ultra-small output (<30k chars)
+// Compact structs for ultra-small output
 // Balanced approach: compact field names but keeps essential vulnerability info
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactAgentReport {
@@ -359,9 +357,16 @@ impl CompactAgentReport {
         let vulns = Self::extract_compact_vulns(findings, 15);
         let risk_files = Self::extract_compact_risk_files(findings, 10);
 
+        // Use only the basename to avoid leaking absolute filesystem paths
+        let repo_name = std::path::Path::new(&findings.git_stats.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&findings.git_stats.path)
+            .to_string();
+
         Self {
             v: "1.0.0".to_string(),
-            repo: findings.git_stats.path.clone(),
+            repo: repo_name,
             risk: summary.overall_risk_score,
             counts: SeverityCounts {
                 crit: summary.critical_findings,
@@ -432,10 +437,13 @@ impl CompactAgentReport {
     }
 
     fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
+        // Use char-based truncation to avoid panicking on multi-byte UTF-8 characters
+        let char_count = s.chars().count();
+        if char_count <= max_len {
             s.to_string()
         } else {
-            format!("{}...", &s[..max_len])
+            let truncated: String = s.chars().take(max_len).collect();
+            format!("{}...", truncated)
         }
     }
 
@@ -477,9 +485,15 @@ impl AgentReport {
     }
 
     fn extract_repository_summary(git_stats: &crate::git::RepositoryStats) -> RepositorySummary {
+        // Use only the basename to avoid leaking absolute filesystem paths
+        let repo_name = std::path::Path::new(&git_stats.path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&git_stats.path)
+            .to_string();
+
         RepositorySummary {
-            path: git_stats.path.clone(),
-            remote_url: git_stats.remote_url.clone(),
+            path: repo_name,
             repository_type: format!("{:?}", git_stats.repository_type),
             total_commits: git_stats.total_commits,
             total_files: git_stats.total_files,

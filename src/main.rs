@@ -22,8 +22,8 @@ use patterns::PatternEngine;
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Repository path to analyze
-    #[arg(short, long)]
-    repo: PathBuf,
+    #[arg(short, long, required_unless_present("output_schema"))]
+    repo: Option<PathBuf>,
 
     /// Pattern set to use (vuln, memory, crypto, all)
     #[arg(short, long, default_value = "vuln")]
@@ -65,26 +65,27 @@ struct Cli {
     #[arg(long)]
     output_schema: bool,
 
-    /// Use ultra-compact agent-json output (<30k chars). Only applies to --output agent-json
+    /// Use ultra-compact agent-json output. Only applies to --output agent-json
     #[arg(long)]
     compact: bool,
 }
 
 fn main() -> Result<()> {
-    // Handle schema output before CLI parsing (so --repo isn't required)
-    let args: Vec<String> = std::env::args().collect();
-    if args.contains(&"--output-schema".to_string()) {
-        AgentReport::print_schema();
-        return Ok(());
-    }
-
-    // Now parse CLI normally
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async_main())
 }
 
 async fn async_main() -> Result<()> {
     let cli = Cli::parse();
+
+    // Handle schema output - this conflicts with repo-based operations
+    if cli.output_schema {
+        AgentReport::print_schema();
+        return Ok(());
+    }
+
+    // Extract repo path early - clap ensures it's Some via required_unless_present
+    let repo = cli.repo.expect("--repo is required when not using --output-schema");
 
     // Initialize logging to stderr so stdout stays clean for data output
     let level = if cli.verbose {
@@ -115,16 +116,16 @@ async fn async_main() -> Result<()> {
                 .bright_cyan()
                 .bold()
         );
-        println!(
-            "Repository: {}",
-            cli.repo.display().to_string().bright_white()
-        );
+    println!(
+        "Repository: {}",
+        repo.display().to_string().bright_white()
+    );
     }
 
     let config = Config::load()?;
     let pattern_engine = PatternEngine::new(&cli.patterns)?;
 
-    let git_analyzer = GitAnalyzer::new(&cli.repo)?;
+    let git_analyzer = GitAnalyzer::new(&repo)?;
     let code_analyzer = CodeAnalyzer::new();
     let mut reporter = Reporter::new(&cli.output, cli.output_file.as_deref())?;
 
@@ -135,7 +136,7 @@ async fn async_main() -> Result<()> {
 
     let code_stats = if cli.stats {
         info!("Stats requested, starting code analysis...");
-        code_analyzer.analyze(&cli.repo, cli.stale_days).await?
+        code_analyzer.analyze(&repo, cli.stale_days).await?
     } else {
         info!("Stats not requested, using default code stats");
         // Create minimal code stats when not requested
@@ -145,7 +146,7 @@ async fn async_main() -> Result<()> {
 
     info!("Starting vulnerability pattern scanning...");
     let vulnerabilities = pattern_engine
-        .scan_repository(&cli.repo, &git_stats)
+        .scan_repository(&repo, &git_stats)
         .await?;
     info!(
         "Pattern scanning complete, found {} vulnerabilities",
