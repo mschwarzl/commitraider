@@ -19,6 +19,40 @@ The tool analyzes commit messages, file modifications, and code patterns to prov
 ```bash
 # Basic repository scan with HTML output
 commitraider --repo /path/to/repository --output html
+
+# Compact JSON for AI agent consumption
+commitraider --repo /path/to/repository --output agent-json --top-n 50
+
+# Analyze with code complexity metrics
+commitraider --repo /path/to/repository --output json --stats
+
+# Show only security fixes with CVE references
+commitraider --repo /path/to/repository --output json --cve-only
+
+# Export JSON Schema for validation
+commitraider --output-schema > agent-report-schema.json
+
+# Ultra-compact mode for tools with character limits (<30k chars)
+commitraider --repo /path/to/repository --output agent-json --compact
+```
+
+### AI/Agent Integration
+
+For AI assistants that need to analyze repository security:
+
+```bash
+# Recommended: use agent-json with bounded output
+commitraider --repo /path/to/repo --output agent-json --top-n 20 --stats
+
+# Compact mode
+commitraider --repo /path/to/repo --output agent-json --compact
+
+# The agent-json output includes:
+# - Overall risk score (0-10)
+# - Critical/high finding counts
+# - CVE references
+# - Risky files (single author, stale, complex)
+# - Vulnerable dependencies
 ```
 
 ## Installation
@@ -45,10 +79,15 @@ Usage: commitraider [OPTIONS] --repo <REPO>
 
 Options:
   -r, --repo <REPO>              Path to Git repository to analyze
-  -o, --output <OUTPUT>          Output format (html, json) [default: html]
-  -c, --cve-only                Show only CVE references
+  -o, --output <OUTPUT>          Output format (html, json, agent-json) [default: html]
+  -p, --patterns <PATTERNS>      Pattern set to use (vuln, memory, crypto, all) [default: vuln]
+      --output-file <OUTPUT_FILE> Output file name. If not specified, agent-json outputs to stdout
+  -c, --cve-only                 Show only CVE references
   -s, --stats                    Include detailed statistics and code complexity analysis
       --stale-days <STALE_DAYS>  Minimum days since last commit to flag as stale [default: 365]
+      --top-n <TOP_N>            Maximum findings/risk files in agent-json output [default: 50]
+      --output-schema            Output the JSON schema for agent-json format and exit
+      --compact                  Use ultra-compact agent-json output (<30k chars). Only applies to --output agent-json
   -v, --verbose                  Enable verbose logging
   -t, --threads <THREADS>        Number of threads for Rayon parallel vulnerability scanning (0 = auto-detect CPU cores) [default: 0]
   -h, --help                     Print help
@@ -65,7 +104,59 @@ Interactive web-based reports featuring:
 - File type distribution and risk categorization
 
 ### Structured Data Formats
-- **JSON**: Machine-readable output for CI/CD pipeline integration
+
+#### JSON (`--output json`)
+Machine-readable output for CI/CD pipeline integration. Note: this format can be very large for big repositories as it includes the complete commit history and file metadata.
+
+#### Agent-JSON (`--output agent-json`) *[Recommended for AI/Agent consumption]*
+A compact, bounded JSON format optimized for AI agents and automated tools:
+
+- **10x smaller** than regular JSON on large repositories
+- **Bounded output**: `--top-n` limits findings and risk files (default 50)
+- **Pre-calculated summaries**: Risk scores, severity levels, and CVE counts
+- **Schema validation**: Use `--output-schema` to get the JSON Schema
+
+Example:
+```bash
+# Basic agent-friendly output (50 items max)
+commitraider --repo /path/to/repo --output agent-json
+
+# Limited output for very large repos
+commitraider --repo /path/to/repo --output agent-json --top-n 20
+
+# With code complexity metrics
+commitraider --repo /path/to/repo --output agent-json --stats
+
+# Get the JSON Schema
+commitraider --output-schema > schema.json
+```
+
+**Ultra-Compact Mode (`--compact`):**
+For tools with strict character limits (e.g., 30,000 char tool output limits):
+
+```bash
+# Ultra-compact output (~5-20k chars, <30k guaranteed)
+commitraider --repo /path/to/repo --output agent-json --compact
+```
+
+The `--compact` flag produces a condensed report with:
+- Shortened field names (e.g., `v`, `repo`, `risk`, `vulns`, `files`)
+- Top 15 vulnerability findings including:
+  - Short commit ID (8 chars)
+  - Truncated commit message (120 chars max)
+  - Risk score and severity
+  - Pattern names, severities, and categories
+  - CVE references
+  - Changed files (basenames only)
+- Top 10 risk files
+- Summary counts by severity
+
+**Agent-JSON Structure:**
+- `repository`: Repository metadata (path, commits, files, authors)
+- `summary`: High-level risk overview (scores, CVE counts, risk file counts)
+- `findings`: Top-N vulnerability findings sorted by risk score
+- `risk_files`: High-risk files (complexity, ownership, staleness issues)
+- `dependencies`: Outdated/vulnerable dependency information
 
 ## Detection Capabilities
 
