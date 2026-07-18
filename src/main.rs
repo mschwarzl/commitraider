@@ -25,7 +25,7 @@ struct Cli {
     #[arg(short, long, required_unless_present("output_schema"))]
     repo: Option<PathBuf>,
 
-    /// Pattern set to use (vuln, memory, crypto, all)
+    /// Pattern set to use (vuln, web/php, workerd/cpp, memory, crypto, all)
     #[arg(short, long, default_value = "vuln")]
     patterns: String,
 

@@ -215,6 +215,7 @@ impl CombinedFindings {
     }
 }
 
+#[allow(dead_code)] // part of the public report model; not yet emitted
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PriorityArea {
     pub area_type: String,

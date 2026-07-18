@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use fancy_regex::Regex;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
+use std::collections::HashMap;
 use std::path::Path;
 use tracing::info;
 
@@ -11,12 +12,88 @@ pub struct PatternEngine {
     compiled_patterns: Vec<(Regex, VulnerabilityPattern)>,
 }
 
+/// Max size of the per-finding diff snippet carried into the (compact) agent
+/// report. The changed-lines diff is already artifact-filtered, so this is
+/// mostly signal; ~16 KB covers a few hundred changed lines — enough for large
+/// security fixes while keeping the report bounded. The full diff (capped at
+/// 256 KB in the git layer) remains available on `CommitInfo`.
+const DIFF_SNIPPET_CHARS: usize = 16_000;
+
+/// Truncate a diff to `max` chars on a line boundary, marking the cut.
+fn diff_snippet(diff: &str, max: usize) -> String {
+    if diff.chars().count() <= max {
+        return diff.to_string();
+    }
+    let mut out = String::with_capacity(max + 16);
+    for ch in diff.chars() {
+        if out.len() >= max {
+            break;
+        }
+        out.push(ch);
+    }
+    // Back off to the last complete line so we don't cut a hunk mid-line.
+    if let Some(nl) = out.rfind('\n') {
+        out.truncate(nl + 1);
+    }
+    out.push_str("[snippet truncated — see full diff]\n");
+    out
+}
+
+/// Non-source paths that must not drive findings or the score: build output,
+/// translations, vendored code, lockfiles.
+fn is_artifact(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.starts_with("dist/")
+        || p.contains("/dist/")
+        || p.ends_with(".map")
+        || p.ends_with(".license")
+        || p.ends_with(".min.js")
+        || p.ends_with(".min.css")
+        || p.contains("/l10n/")
+        || p.starts_with("3rdparty/")
+        || p.starts_with("vendor/")
+        || p.contains("/vendor/")
+        || p.contains("node_modules/")
+        || p.ends_with("-lock.json")
+        || p.ends_with("composer.lock")
+        || p.ends_with(".lock")
+}
+
+fn is_test(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.contains("/tests/")
+        || p.contains("/test/")
+        || p.contains("test.php")
+        || p.contains(".test.")
+        || p.contains(".spec.")
+        || p.ends_with("_test.go")
+}
+
+/// A real source file: not an artifact and not a test. Tests are corroboration,
+/// not the primary changed surface.
+fn is_source_file(path: &str) -> bool {
+    !is_artifact(path) && !is_test(path)
+}
+
+/// Normalize a commit subject so identical backports across branches collapse
+/// to one key: first line, lowercased, trailing `(#1234)` PR ref stripped.
+fn normalize_subject(message: &str) -> String {
+    let mut line = message.lines().next().unwrap_or("").trim().to_ascii_lowercase();
+    if let Some(pos) = line.rfind("(#") {
+        if line.ends_with(')') {
+            line.truncate(pos);
+        }
+    }
+    line.trim().to_string()
+}
+
 impl PatternEngine {
     pub fn new(pattern_set: &str) -> Result<Self> {
         let patterns = match pattern_set {
             "memorysafety" => Self::get_memory_safety_patterns(),
             "crypto" => Self::get_crypto_patterns(),
-            "web" => Self::get_web_patterns(),
+            "web" | "php" => Self::get_web_patterns(),
+            "workerd" | "cpp" => Self::get_workerd_patterns(),
             "all" => default_patterns(),
             _ => Self::get_vuln_patterns(),
         };
@@ -40,8 +117,6 @@ impl PatternEngine {
         _repo_path: &Path,
         git_stats: &RepositoryStats,
     ) -> Result<Vec<VulnerabilityFinding>> {
-        info!("Entering scan_repository method");
-
         info!("Starting vulnerability pattern scan...");
 
         let pb = ProgressBar::new(git_stats.commit_history.len() as u64);
@@ -61,6 +136,10 @@ impl PatternEngine {
             .collect();
 
         pb.finish_with_message("Scan completed");
+
+        // Collapse identical fixes backported across branches into one finding.
+        let findings = Self::cluster_backports(findings);
+
         info!("Found {} potential vulnerabilities", findings.len());
         Ok(findings)
     }
@@ -72,27 +151,73 @@ impl PatternEngine {
         let mut patterns_matched = Vec::new();
         let mut cve_references = Vec::new();
 
-        // Go through commit message and match the compiled patterns
+        let message = &commit.message;
+        let message_lc = message.to_ascii_lowercase();
+        let diff = &commit.diff;
+        let diff_lc = diff.to_ascii_lowercase();
+
         for (regex, pattern) in &self.compiled_patterns {
-            if let Ok(Some(captures)) = regex.captures(&commit.message) {
+            // Language gate: skip a language-specific rule unless the commit
+            // actually touches a matching source file (keeps the workerd/KJ C++
+            // rules from firing on a PHP/JS repo, and vice versa).
+            if !pattern.lang_ext.is_empty() {
+                let touches_lang = commit.files_changed.iter().any(|f| {
+                    let fl = f.to_ascii_lowercase();
+                    pattern.lang_ext.iter().any(|ext| fl.ends_with(ext.as_str()))
+                });
+                if !touches_lang {
+                    continue;
+                }
+            }
+
+            // Which text(s) does this pattern look at?
+            let haystacks: &[(&str, &str, &str)] = match pattern.target {
+                MatchTarget::Message => &[("commit_message", message, &message_lc)],
+                MatchTarget::Diff => &[("diff", diff, &diff_lc)],
+                MatchTarget::Both => &[
+                    ("commit_message", message, &message_lc),
+                    ("diff", diff, &diff_lc),
+                ],
+            };
+
+            for (label, text, text_lc) in haystacks {
+                if text.is_empty() {
+                    continue;
+                }
+                let Ok(Some(captures)) = regex.captures(text) else {
+                    continue;
+                };
+
+                // Context gating: require a security-relevant nearby term and
+                // suppress on a benign one (drops MD5-as-integrity false
+                // positives).
+                if !pattern.require_near.is_empty()
+                    && !pattern.require_near.iter().any(|n| text_lc.contains(n))
+                {
+                    continue;
+                }
+                if pattern.suppress_near.iter().any(|n| text_lc.contains(n)) {
+                    continue;
+                }
+
                 let matched_text = captures.get(0).unwrap().as_str().to_string();
                 if pattern.name == "CVE Reference" {
-                    if let Ok(Some(cve_match)) = regex.captures(&commit.message) {
-                        if let Some(cve_id) = cve_match.get(1) {
-                            cve_references.push(format!("CVE-{}", cve_id.as_str()));
-                        }
+                    if let Some(cve_id) = captures.get(1) {
+                        cve_references.push(format!("CVE-{}", cve_id.as_str()));
                     }
                 }
+
                 patterns_matched.push(PatternMatch {
                     pattern_name: pattern.name.clone(),
                     matched_text,
                     severity: pattern.severity.clone(),
                     category: pattern.category.clone(),
-                    file_path: "commit_message".to_string(),
+                    file_path: label.to_string(),
                     line_number: None,
-                    context: commit.message.clone(),
+                    context: (*text).chars().take(400).collect(),
                     cve_references: cve_references.clone(),
                 });
+                break; // one match per pattern is enough
             }
         }
 
@@ -100,7 +225,13 @@ impl PatternEngine {
             return Ok(None);
         }
 
-        let risk_score = self.calculate_risk_score(&patterns_matched, commit);
+        let source_files: usize = commit
+            .files_changed
+            .iter()
+            .filter(|f| is_source_file(f))
+            .count();
+
+        let risk_score = self.calculate_risk_score(&patterns_matched, source_files);
 
         Ok(Some(VulnerabilityFinding {
             commit_id: commit.id.clone(),
@@ -111,33 +242,83 @@ impl PatternEngine {
             patterns_matched,
             risk_score,
             cve_references,
+            backport_count: 1,
+            diff_snippet: diff_snippet(&commit.diff, DIFF_SNIPPET_CHARS),
         }))
     }
 
-    fn calculate_risk_score(
-        &self,
-        patterns: &[PatternMatch],
-        commit: &crate::git::CommitInfo,
-    ) -> f64 {
-        let base_score: f64 = patterns
+    fn severity_weight(sev: &Severity) -> f64 {
+        match sev {
+            Severity::Critical => 9.0,
+            Severity::High => 7.0,
+            Severity::Medium => 5.0,
+            Severity::Low => 3.0,
+            Severity::Info => 1.0,
+        }
+    }
+
+    /// Evidence-based score. Drives on the strongest signal, not commit churn:
+    /// diff-signature matches are trusted, message-only matches are discounted,
+    /// and commits that touch no source file (artifacts/tests only) are floored.
+    fn calculate_risk_score(&self, patterns: &[PatternMatch], source_files: usize) -> f64 {
+        let base = patterns
             .iter()
-            .map(|p| match p.severity {
-                Severity::Critical => 9.0,
-                Severity::High => 7.0,
-                Severity::Medium => 5.0,
-                Severity::Low => 3.0,
-                Severity::Info => 1.0,
-            })
-            .sum();
+            .map(|p| Self::severity_weight(&p.severity))
+            .fold(0.0_f64, f64::max);
 
-        let file_multiplier = (commit.files_changed.len() as f64).sqrt();
-        let cve_multiplier = if patterns.iter().any(|p| p.pattern_name == "CVE Reference") {
-            2.0
-        } else {
-            1.0
-        };
+        let has_diff_match = patterns.iter().any(|p| p.file_path == "diff");
+        let has_msg_match = patterns.iter().any(|p| p.file_path == "commit_message");
+        let has_cve = patterns.iter().any(|p| p.pattern_name == "CVE Reference");
 
-        (base_score * file_multiplier * cve_multiplier).min(10.0)
+        let mut score = base;
+
+        // Message-only evidence is weak in a mature repo (terse subjects).
+        if !has_diff_match {
+            score *= 0.5;
+        }
+        // No source touched → almost certainly noise (translations, build output).
+        if source_files == 0 {
+            score *= 0.3;
+        }
+        // Message vocabulary + a corroborating code-level signature agree.
+        if has_diff_match && has_msg_match {
+            score *= 1.15;
+        }
+        if has_cve {
+            score *= 1.5;
+        }
+
+        score.min(10.0)
+    }
+
+    /// Merge commits that share a normalized subject (same fix backported to
+    /// several stable branches) into one representative finding, recording the
+    /// backport count and boosting the score — a fix shipped to N branches is a
+    /// strong CVE signal.
+    fn cluster_backports(findings: Vec<VulnerabilityFinding>) -> Vec<VulnerabilityFinding> {
+        let mut groups: HashMap<String, Vec<VulnerabilityFinding>> = HashMap::new();
+        for f in findings {
+            let key = normalize_subject(&f.commit_message);
+            groups.entry(key).or_default().push(f);
+        }
+
+        let mut out = Vec::with_capacity(groups.len());
+        for (_key, mut group) in groups {
+            // Representative = highest-scoring commit in the cluster.
+            group.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+            let count = group.len();
+            let mut rep = group.into_iter().next().unwrap();
+            rep.backport_count = count;
+            if count > 1 {
+                // +0.5 per extra branch, capped — a widely backported fix is
+                // almost certainly a real, triaged vulnerability.
+                rep.risk_score = (rep.risk_score + (count as f64 - 1.0) * 0.5).min(10.0);
+            }
+            out.push(rep);
+        }
+
+        out.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+        out
     }
 
     fn get_memory_safety_patterns() -> Vec<VulnerabilityPattern> {
@@ -157,7 +338,27 @@ impl PatternEngine {
     fn get_web_patterns() -> Vec<VulnerabilityPattern> {
         default_patterns()
             .into_iter()
-            .filter(|p| matches!(p.category, Category::WebSecurity))
+            .filter(|p| {
+                matches!(
+                    p.category,
+                    Category::WebSecurity
+                        | Category::AuthenticationAuthorization
+                        | Category::InputValidation
+                        | Category::CodeInjection
+                )
+            })
+            .collect()
+    }
+
+    /// workerd/KJ C++ ruleset: the explicitly-tagged workerd rules plus the
+    /// general memory-safety / concurrency patterns.
+    fn get_workerd_patterns() -> Vec<VulnerabilityPattern> {
+        default_patterns()
+            .into_iter()
+            .filter(|p| {
+                p.ruleset == "workerd"
+                    || matches!(p.category, Category::MemorySafety | Category::Concurrency)
+            })
             .collect()
     }
 

@@ -25,6 +25,10 @@ pub struct CommitInfo {
     pub insertions: usize,
     pub deletions: usize,
     pub branch: Option<String>,
+    /// Unified diff of changed (added/removed) lines for source files only,
+    /// capped in size. Empty when unavailable. Used for diff-signature scanning.
+    #[serde(default)]
+    pub diff: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

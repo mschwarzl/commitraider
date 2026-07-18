@@ -176,7 +176,7 @@ impl GitAnalyzer {
             let semaphore = Arc::new(Semaphore::new(32)); // Limit concurrent git commands
             let mut join_set = JoinSet::new();
 
-            for (commit_id, _, _, _, _, _, _, _) in &partial_commits {
+            for (idx, (commit_id, _, _, _, _, _, _, _)) in partial_commits.iter().enumerate() {
                 let commit_id = commit_id.clone();
                 let repo_path = repo_path.clone();
                 let permit = Arc::clone(&semaphore);
@@ -185,27 +185,40 @@ impl GitAnalyzer {
                     let _permit = permit.acquire().await.unwrap();
 
                     // Add timeout to prevent hanging git commands
-                    tokio::time::timeout(
+                    let files = tokio::time::timeout(
                         Duration::from_secs(30),
                         Self::get_changed_files_concurrent(&repo_path, &commit_id),
                     )
                     .await
                     .unwrap_or_else(|_| {
-                        debug!("Git command timeout for commit {}", commit_id);
-                        Ok(Vec::new()) // Return empty on timeout
+                        debug!("Git command timeout (files) for commit {}", commit_id);
+                        Ok(Vec::new())
                     })
+                    .unwrap_or_default();
+
+                    // Capture the diff of source files for signature scanning
+                    let diff = tokio::time::timeout(
+                        Duration::from_secs(30),
+                        Self::get_commit_diff_concurrent(&repo_path, &commit_id),
+                    )
+                    .await
+                    .unwrap_or_else(|_| {
+                        debug!("Git command timeout (diff) for commit {}", commit_id);
+                        String::new()
+                    });
+
+                    (idx, files, diff)
                 });
             }
 
-            // Collect results maintaining order
-            let mut file_results = Vec::with_capacity(partial_commits.len());
+            // Collect results and restore original order by index.
+            // (JoinSet::join_next completes out of order, so index explicitly.)
+            let mut indexed: Vec<Option<(Vec<String>, String)>> =
+                vec![None; partial_commits.len()];
             while let Some(result) = join_set.join_next().await {
                 match result {
-                    Ok(files_result) => file_results.push(files_result),
-                    Err(e) => {
-                        debug!("Task join error: {}", e);
-                        file_results.push(Ok(Vec::new())); // Fallback to empty
-                    }
+                    Ok((idx, files, diff)) => indexed[idx] = Some((files, diff)),
+                    Err(e) => debug!("Task join error: {}", e),
                 }
             }
 
@@ -225,10 +238,10 @@ impl GitAnalyzer {
                 ),
             ) in partial_commits.into_iter().enumerate()
             {
-                let files_changed = file_results[i]
-                    .as_ref()
-                    .map_err(|e| anyhow::anyhow!("Failed to get changed files for {}: {}", id, e))?
-                    .clone();
+                let (files_changed, diff) = indexed
+                    .get_mut(i)
+                    .and_then(|slot| slot.take())
+                    .unwrap_or_else(|| (Vec::new(), String::new()));
 
                 commit_infos.push(CommitInfo {
                     id,
@@ -243,6 +256,7 @@ impl GitAnalyzer {
                     insertions: 0,
                     deletions: 0,
                     branch: None,
+                    diff,
                 });
 
                 // Update progress bar
@@ -276,6 +290,72 @@ impl GitAnalyzer {
         pb.finish_with_message("Commit analysis complete");
 
         Ok(())
+    }
+
+    /// Fetch the unified diff for a commit, restricted to source files (build
+    /// artifacts / translations / vendored code excluded via pathspec) and
+    /// reduced to changed (added/removed) lines. Size-capped. Never fails —
+    /// returns an empty string on any error so scanning degrades gracefully.
+    async fn get_commit_diff_concurrent(repo_path: &std::path::Path, commit_id: &str) -> String {
+        const MAX_DIFF_BYTES: usize = 256 * 1024;
+
+        // Exclude non-source paths at the git level: this both speeds up the
+        // command and keeps compiled artifacts out of signature scanning.
+        let excludes = [
+            ":(exclude)dist/*",
+            ":(exclude)*/dist/*",
+            ":(exclude)*.map",
+            ":(exclude)*.license",
+            ":(exclude)*.min.js",
+            ":(exclude)*.min.css",
+            ":(exclude)*/l10n/*",
+            ":(exclude)3rdparty/*",
+            ":(exclude)vendor/*",
+            ":(exclude)node_modules/*",
+            ":(exclude)composer.lock",
+            ":(exclude)package-lock.json",
+            ":(exclude)*.lock",
+        ];
+
+        let mut cmd = tokio::process::Command::new("git");
+        cmd.arg("-C")
+            .arg(repo_path.to_str().unwrap_or("."))
+            .args([
+                "show",
+                "--no-color",
+                "--unified=0",
+                "--pretty=format:",
+                commit_id,
+                "--",
+                ".",
+            ])
+            .args(excludes);
+        cmd.kill_on_drop(true);
+
+        let output = match cmd.output().await {
+            Ok(o) if o.status.success() => o,
+            _ => return String::new(),
+        };
+
+        let raw = String::from_utf8_lossy(&output.stdout);
+
+        // Keep only changed lines (added/removed), dropping hunk headers and the
+        // +++/--- file markers. This is what the signature patterns look at.
+        let mut out = String::new();
+        for line in raw.lines() {
+            let changed = (line.starts_with('+') && !line.starts_with("+++"))
+                || (line.starts_with('-') && !line.starts_with("---"));
+            if !changed {
+                continue;
+            }
+            out.push_str(line);
+            out.push('\n');
+            if out.len() >= MAX_DIFF_BYTES {
+                out.push_str("\n[diff truncated]\n");
+                break;
+            }
+        }
+        out
     }
 
     // Concurrent version for parallel processing with enhanced tokio usage

@@ -13,18 +13,54 @@ pub struct VulnerabilityPattern {
     pub description: String,
     pub cwe: Option<String>,
     pub examples: Vec<String>,
+    /// Which text the pattern is matched against.
+    #[serde(default)]
+    pub target: MatchTarget,
+    /// If non-empty, the pattern only fires when at least one of these
+    /// (case-insensitive) substrings is also present in the scanned text.
+    /// Used to require a *security* context (e.g. only flag MD5 near
+    /// `password`/`token`/`hmac`).
+    #[serde(default)]
+    pub require_near: Vec<String>,
+    /// If any of these (case-insensitive) substrings is present in the scanned
+    /// text, the match is suppressed. Used to drop benign contexts (e.g. MD5 as
+    /// an S3 `Content-MD5` integrity header or a filecache key).
+    #[serde(default)]
+    pub suppress_near: Vec<String>,
+    /// If non-empty, the pattern only fires when the commit touches a file whose
+    /// path ends with one of these (e.g. `.c++`, `.cpp`, `.h` for workerd/KJ
+    /// C++ rules). Keeps language-specific rules from polluting other targets.
+    #[serde(default)]
+    pub lang_ext: Vec<String>,
+    /// Named ruleset this pattern belongs to (e.g. "workerd"). Selected via the
+    /// `--patterns <ruleset>` option; empty = part of the general set.
+    #[serde(default)]
+    pub ruleset: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Where a pattern is evaluated.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub enum MatchTarget {
+    /// Commit subject/body only (weak evidence — terse security fixes miss it).
+    #[default]
+    Message,
+    /// Changed (added/removed) source lines only — high signal in mature repos.
+    Diff,
+    /// Both message and diff.
+    Both,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub enum Severity {
     Critical,
     High,
     Medium,
     Low,
+    #[default]
     Info,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 pub enum Category {
     MemorySafety,
     Cryptography,
@@ -34,6 +70,7 @@ pub enum Category {
     Concurrency,
     DataExposure,
     CodeInjection,
+    #[default]
     Generic,
 }
 
@@ -59,209 +96,348 @@ pub struct VulnerabilityFinding {
     pub patterns_matched: Vec<PatternMatch>,
     pub risk_score: f64,
     pub cve_references: Vec<String>,
+    /// Number of commits (across branches) sharing this fix. 1 for a normal
+    /// commit; >1 when the same fix was backported — a strong CVE signal.
+    #[serde(default = "one")]
+    pub backport_count: usize,
+    /// Capped changed-lines diff snippet for downstream triage.
+    #[serde(default)]
+    pub diff_snippet: String,
+}
+
+fn one() -> usize {
+    1
+}
+
+// --- pattern constructors (keep the pattern table terse) --------------------
+
+fn msg(
+    name: &str,
+    pattern: &str,
+    severity: Severity,
+    category: Category,
+    cwe: &str,
+) -> VulnerabilityPattern {
+    VulnerabilityPattern {
+        name: name.to_string(),
+        pattern: pattern.to_string(),
+        severity,
+        category,
+        description: name.to_string(),
+        cwe: if cwe.is_empty() {
+            None
+        } else {
+            Some(cwe.to_string())
+        },
+        examples: Vec::new(),
+        target: MatchTarget::Message,
+        require_near: Vec::new(),
+        suppress_near: Vec::new(),
+        lang_ext: Vec::new(),
+        ruleset: String::new(),
+    }
+}
+
+fn diff(
+    name: &str,
+    pattern: &str,
+    severity: Severity,
+    category: Category,
+    cwe: &str,
+) -> VulnerabilityPattern {
+    VulnerabilityPattern {
+        target: MatchTarget::Diff,
+        ..msg(name, pattern, severity, category, cwe)
+    }
+}
+
+/// C/C++ file extensions for language-gated rules (workerd/KJ).
+fn cpp_exts() -> Vec<String> {
+    [
+        ".c", ".cc", ".cpp", ".cxx", ".c++", ".h", ".hh", ".hpp", ".h++", ".capnp",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+/// A workerd/KJ-specific C++ rule: gated to C/C++ files and tagged `workerd`.
+fn workerd(
+    name: &str,
+    pattern: &str,
+    severity: Severity,
+    category: Category,
+    cwe: &str,
+) -> VulnerabilityPattern {
+    VulnerabilityPattern {
+        lang_ext: cpp_exts(),
+        ruleset: "workerd".to_string(),
+        ..msg(name, pattern, severity, category, cwe)
+    }
 }
 
 pub fn default_patterns() -> Vec<VulnerabilityPattern> {
-    vec![
-        // Memory Safety Patterns
+    let mut v = vec![
+        // ---- Message-keyword patterns (weak evidence, high-precision vocab) --
+        msg(
+            "Authorization Bypass / IDOR",
+            r"(?i)\b(auth(?:entication|oriz(?:ation)?)?[-\s]bypass|privilege[-\s]escalation|idor|insecure[-\s]direct[-\s]object|broken[-\s]access[-\s]control|missing[-\s]authoriz|access[-\s]control)\b",
+            Severity::Critical,
+            Category::AuthenticationAuthorization,
+            "CWE-639",
+        ),
+        msg(
+            "Injection / RCE",
+            r"(?i)\b(code[-\s]injection|command[-\s]injection|sql[-\s]injection|remote[-\s]code[-\s]execution|\brce\b)\b",
+            Severity::Critical,
+            Category::CodeInjection,
+            "CWE-94",
+        ),
+        msg(
+            "SSRF",
+            r"(?i)\b(ssrf|server[-\s]side[-\s]request[-\s]forgery)\b",
+            Severity::High,
+            Category::WebSecurity,
+            "CWE-918",
+        ),
+        msg(
+            "Path Traversal",
+            r"(?i)\b(path[-\s]traversal|directory[-\s]traversal|zip[-\s]slip)\b",
+            Severity::High,
+            Category::InputValidation,
+            "CWE-22",
+        ),
+        msg(
+            "XXE",
+            r"(?i)\b(xxe|xml[-\s]external[-\s]entit)\b",
+            Severity::High,
+            Category::InputValidation,
+            "CWE-611",
+        ),
+        msg(
+            "Insecure Deserialization",
+            r"(?i)\b(insecure[-\s]deserializ|object[-\s]injection|pop[-\s]chain|gadget[-\s]chain)\b",
+            Severity::High,
+            Category::CodeInjection,
+            "CWE-502",
+        ),
+        msg(
+            "Cross-Site Scripting",
+            r"(?i)\b(xss|cross[-\s]site[-\s]scripting)\b",
+            Severity::Medium,
+            Category::WebSecurity,
+            "CWE-79",
+        ),
+        msg(
+            "Use After Free",
+            r"(?i)\b(use[-\s]after[-\s]free|uaf|dangling[-\s]pointer)\b",
+            Severity::Critical,
+            Category::MemorySafety,
+            "CWE-416",
+        ),
+        msg(
+            "Buffer Overflow",
+            r"(?i)\b(buffer[-\s]overflow|heap[-\s]overflow|stack[-\s]overflow)\b",
+            Severity::Critical,
+            Category::MemorySafety,
+            "CWE-120",
+        ),
+        msg(
+            "Out-of-Bounds Access",
+            r"(?i)\b(out[-\s]of[-\s]bounds|\boob\b|index[-\s]out[-\s]of[-\s]range)\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-787",
+        ),
+        msg(
+            "Race Condition",
+            r"(?i)\b(race[-\s]condition|data[-\s]race|toctou)\b",
+            Severity::Medium,
+            Category::Concurrency,
+            "CWE-362",
+        ),
+        msg(
+            "Double Free",
+            r"(?i)\b(double[-\s]free|free[-\s]after[-\s]free)\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-415",
+        ),
+        msg(
+            "Type Confusion",
+            r"(?i)\b(type[-\s]confusion)\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-843",
+        ),
+        // ---- workerd / KJ C++ ruleset (gated to C/C++ files) ------------------
+        workerd(
+            "KJ Use After Move",
+            r"(?i)\b(use[-\s]after[-\s]move|moved[-\s]value|kj::mv)\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-416",
+        ),
+        workerd(
+            "Lock Scope Issue",
+            r"(?i)\b(lock[-\s]scope|lock[-\s]released|outside[-\s]lock|lock.*released.*use)\b",
+            Severity::Medium,
+            Category::Concurrency,
+            "CWE-667",
+        ),
+        workerd(
+            "Actor State Race",
+            r"(?i)\b(actor[-\s]startup|concurrent[-\s]actor|toctou|check.*await.*init)\b",
+            Severity::High,
+            Category::Concurrency,
+            "CWE-362",
+        ),
+        workerd(
+            "GC Visitor Missing",
+            r"(?i)\b(visitForGc|gc[-\s]visitor|missing[-\s]visitor)\b",
+            Severity::Medium,
+            Category::MemorySafety,
+            "CWE-401",
+        ),
+        workerd(
+            "Callback Self-Destruction",
+            r"(?i)\b(this.*after|callback.*delete|self[-\s]destruct|abort.*drain)\b",
+            Severity::Critical,
+            Category::MemorySafety,
+            "CWE-416",
+        ),
+        workerd(
+            "Heap Corruption",
+            r"(?i)\b(heap[-\s]corruption|heapArray|buffer[-\s]bounds|overrun)\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-787",
+        ),
         VulnerabilityPattern {
-            name: "Use After Free".to_string(),
-            pattern: r"(?i)\b(use[-\s]after[-\s]free|uaf|dangling[-\s]pointer)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::MemorySafety,
-            description: "Potential use-after-free vulnerability".to_string(),
-            cwe: Some("CWE-416".to_string()),
-            examples: vec!["Fix use after free".to_string(), "UAF vulnerability".to_string()],
+            lang_ext: cpp_exts(),
+            ruleset: "workerd".to_string(),
+            ..msg(
+                "Static Without Const",
+                r"(?i)\bstatic\s+(?!const)\b",
+                Severity::Low,
+                Category::Concurrency,
+                "CWE-362",
+            )
         },
-        VulnerabilityPattern {
-            name: "Buffer Overflow".to_string(),
-            pattern: r"(?i)\b(buffer[-\s]overflow|stack[-\s]overflow|heap[-\s]overflow|bof|ovflw|StackO)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::MemorySafety,
-            description: "Potential buffer overflow vulnerability".to_string(),
-            cwe: Some("CWE-120".to_string()),
-            examples: vec!["Fix buffer overflow".to_string(), "Stack overflow protection".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Out-of-Bounds Access".to_string(),
-            pattern: r"(?i)\b(out[-\s]of[-\s]bounds|oob|bounds[-\s]check|invalid[-\s]access|invalid[-\s]memory|array[-\s]bounds|index[-\s]out[-\s]of[-\s]range|out[-\s]of[-\s]range)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::MemorySafety,
-            description: "Potential out-of-bounds memory access vulnerability".to_string(),
-            cwe: Some("CWE-787".to_string()),
-            examples: vec!["Fix OOB access".to_string(), "Add bounds check".to_string(), "Invalid memory access".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Double Free".to_string(),
-            pattern: r"(?i)\b(double[-\s]free|free[-\s]after[-\s]free)\b".to_string(),
-            severity: Severity::High,
-            category: Category::MemorySafety,
-            description: "Potential double-free vulnerability".to_string(),
-            cwe: Some("CWE-415".to_string()),
-            examples: vec!["Fix double free".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Race Condition".to_string(),
-            pattern: r"(?i)\b(race[-\s]condition|data[-\s]race|concurrency[-\s]bug)\b".to_string(),
-            severity: Severity::High,
-            category: Category::Concurrency,
-            description: "Potential race condition vulnerability".to_string(),
-            cwe: Some("CWE-362".to_string()),
-            examples: vec!["Fix race condition".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Memory Leak".to_string(),
-            pattern: r"(?i)\b(memory[-\s]leak|mem[-\s]leak|resource[-\s]leak)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::MemorySafety,
-            description: "Potential memory leak".to_string(),
-            cwe: Some("CWE-401".to_string()),
-            examples: vec!["Fix memory leak".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Null Pointer Dereference".to_string(),
-            pattern: r"(?i)\b(null[-\s]pointer|nullptr[-\s]dereference|segfault|sigsegv)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::MemorySafety,
-            description: "Potential null pointer dereference".to_string(),
-            cwe: Some("CWE-476".to_string()),
-            examples: vec!["Fix null pointer".to_string(), "Segmentation fault".to_string()],
-        },
+        // ---- Diff-signature patterns (high signal; match added/removed lines) --
+        // A fix that introduces an object-relation / ownership check is the
+        // fingerprint of an IDOR/BOLA fix (e.g. the comments "Check comment
+        // object" CVE).
+        diff(
+            "Added object-relation / ownership check",
+            r#"(?im)^\+.*(getObjectId\(|getObjectType\(|isUserAccessible|canUser\w*See|->getOwner\(|getUserFolder\([^)]*\)->get|!==\s*\$this->|throw new (?:Forbidden|NotFound))"#,
+            Severity::High,
+            Category::AuthenticationAuthorization,
+            "CWE-639",
+        ),
+        diff(
+            "Added SSRF guard",
+            r"(?im)^\+.*(allow_local_address|RemoteHostValidator|preventLocalAddress|isLocalAddress|dns_pinning)",
+            Severity::High,
+            Category::WebSecurity,
+            "CWE-918",
+        ),
+        diff(
+            "Added path-traversal guard",
+            r#"(?im)^\+.*(basename\(|normalizePath|realpath\(|str_contains\([^,]*,\s*['"]\.\.|assertNotPathTraversal)"#,
+            Severity::High,
+            Category::InputValidation,
+            "CWE-22",
+        ),
+        diff(
+            "Added order-by / identifier whitelist (SQLi)",
+            r#"(?im)^\+.*(in_array\(strtoupper|['"]ASC['"].*['"]DESC['"]|quoteColumnName)"#,
+            Severity::Medium,
+            Category::InputValidation,
+            "CWE-89",
+        ),
+        diff(
+            "Deserialization hardening",
+            r"(?im)^\+.*(allowed_classes|unserialize\()",
+            Severity::High,
+            Category::CodeInjection,
+            "CWE-502",
+        ),
+        diff(
+            "XXE hardening",
+            r"(?im)^\+.*(LIBXML_NOENT|disableEntityLoader|loadXML|external.entit)",
+            Severity::High,
+            Category::InputValidation,
+            "CWE-611",
+        ),
+        // ---- Info-level corroboration (never dominates on its own) -----------
+        msg(
+            "CVE Reference",
+            r"(?i)\bcve[-\s]?(\d{4}[-\s]?\d{4,})\b",
+            Severity::Info,
+            Category::Generic,
+            "",
+        ),
+        msg(
+            "Security-fix marker",
+            r"(?i)\b(fix\(security\)|security[-\s]fix|GHSA-|hackerone|advisory)\b",
+            Severity::Info,
+            Category::Generic,
+            "",
+        ),
+    ];
 
-        // Security Patterns
-        VulnerabilityPattern {
-            name: "Code Injection".to_string(),
-            pattern: r"(?i)\b(code[-\s]injection|command[-\s]injection|sql[-\s]injection|remote[-\s]code[-\s]execution|rce)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::CodeInjection,
-            description: "Potential code injection vulnerability".to_string(),
-            cwe: Some("CWE-94".to_string()),
-            examples: vec!["Fix code injection".to_string(), "SQL injection".to_string()],
-        },
+    // ---- Context-gated weak crypto ------------------------------------------
+    // Only flag md5/sha1/des/rc4 in a *security* context, and never when the
+    // surrounding text points at a benign integrity/cache use.
+    v.push(VulnerabilityPattern {
+        name: "Weak Cryptography (security context)".to_string(),
+        pattern: r"(?i)\b(md5|sha1|md4|\bdes\b|rc4|\becb\b)\b".to_string(),
+        severity: Severity::Medium,
+        category: Category::Cryptography,
+        description: "Weak hash/cipher used in a security-sensitive context".to_string(),
+        cwe: Some("CWE-327".to_string()),
+        examples: Vec::new(),
+        target: MatchTarget::Both,
+        require_near: [
+            "password",
+            "passwd",
+            "token",
+            "secret",
+            "hmac",
+            "sign",
+            "signature",
+            "session",
+            "csrf",
+            "auth",
+            "kdf",
+            "salt",
+            "credential",
+            "cookie",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        suppress_near: [
+            "content-md5",
+            "etag",
+            "checksum",
+            "cache",
+            "filecache",
+            "integrity",
+            "dedup",
+            "uniqid",
+            "cache_key",
+            "cachekey",
+            "content md5",
+            "s3",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect(),
+        lang_ext: Vec::new(),
+        ruleset: String::new(),
+    });
 
-        // Type confusion
-        VulnerabilityPattern {
-            name: "Type confusion".to_string(),
-            pattern: r"(?i)\b(type confusion|confused)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::CodeInjection,
-            description: "Access of Resource Using Incompatible Type ('Type Confusion')".to_string(),
-            cwe: Some("CWE-843".to_string()),
-            examples: vec!["Fix code injection".to_string(), "Type confusion".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Authentication Bypass".to_string(),
-            pattern: r"(?i)\b(auth[-\s]bypass|authentication[-\s]bypass|privilege[-\s]escalation)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::AuthenticationAuthorization,
-            description: "Potential authentication bypass".to_string(),
-            cwe: Some("CWE-287".to_string()),
-            examples: vec!["Fix auth bypass".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Cross-Site Scripting".to_string(),
-            pattern: r"(?i)\b(xss|cross[-\s]site[-\s]scripting)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::WebSecurity,
-            description: "Potential XSS vulnerability".to_string(),
-            cwe: Some("CWE-79".to_string()),
-            examples: vec!["Fix XSS".to_string()],
-        },
-
-        // Crypto Patterns
-        VulnerabilityPattern {
-            name: "Weak Cryptography".to_string(),
-            pattern: r"(?i)\b(weak[-\s]crypto|weak[-\s]cipher|broken[-\s]crypto|md5|sha1\b|des\b|rc4)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::Cryptography,
-            description: "Weak cryptographic implementation".to_string(),
-            cwe: Some("CWE-327".to_string()),
-            examples: vec!["Replace weak crypto".to_string()],
-        },
-
-        // Generic Security
-        VulnerabilityPattern {
-            name: "CVE Reference".to_string(),
-            pattern: r"(?i)\bcve[-\s]?(\d{4}[-\s]?\d{4,})\b".to_string(),
-            severity: Severity::Info,
-            category: Category::Generic,
-            description: "CVE reference found".to_string(),
-            cwe: None,
-            examples: vec!["CVE-2021-1234".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Security Fix".to_string(),
-            pattern: r"(?i)\b(security[-\s]fix|security[-\s]patch|vulnerability|exploit|malicious|vulnerable|fallthrough)\b".to_string(),
-            severity: Severity::Info,
-            category: Category::Generic,
-            description: "General security-related change".to_string(),
-            cwe: None,
-            examples: vec!["Security fix".to_string()],
-        },
-
-        // workerd-specific patterns based on historical vulnerabilities
-        VulnerabilityPattern {
-            name: "KJ Use After Move".to_string(),
-            pattern: r"(?i)\b(use[-\s]after[-\s]move|moved[-\s]value|kj::mv)\b".to_string(),
-            severity: Severity::High,
-            category: Category::MemorySafety,
-            description: "KJ ownership violation (use after move)".to_string(),
-            cwe: Some("CWE-416".to_string()),
-            examples: vec!["Fix use after kj::mv".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Lock Scope Issue".to_string(),
-            pattern: r"(?i)\b(lock[-\s]scope|lock[-\s]released|outside[-\s]lock|lock.*released.*use)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::Concurrency,
-            description: "Data accessed outside lock scope".to_string(),
-            cwe: Some("CWE-362".to_string()),
-            examples: vec!["Fix lock scope violation".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Actor State Race".to_string(),
-            pattern: r"(?i)\b(actor[-\s]startup|concurrent[-\s]actor|toctou|check.*await.*init)\b".to_string(),
-            severity: Severity::High,
-            category: Category::Concurrency,
-            description: "Race condition in actor initialization".to_string(),
-            cwe: Some("CWE-367".to_string()),
-            examples: vec!["Fix race in actor startup".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "GC Visitor Missing".to_string(),
-            pattern: r"(?i)\b(visitForGc|gc[-\s]visitor|missing[-\s]visitor)\b".to_string(),
-            severity: Severity::Medium,
-            category: Category::MemorySafety,
-            description: "Missing or incomplete GC visitor implementation".to_string(),
-            cwe: Some("CWE-401".to_string()),
-            examples: vec!["Add missing visitForGc".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Callback Self-Destruction".to_string(),
-            pattern: r"(?i)\b(this.*after|callback.*delete|self[-\s]destruct|abort.*drain)\b".to_string(),
-            severity: Severity::Critical,
-            category: Category::MemorySafety,
-            description: "Object accessed after callback that destroys it".to_string(),
-            cwe: Some("CWE-416".to_string()),
-            examples: vec!["Fix UAF from self-destroying callback".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Static Without Const".to_string(),
-            pattern: r"(?i)\bstatic\s+(?!const)\b".to_string(),
-            severity: Severity::Low,
-            category: Category::Concurrency,
-            description: "Non-const static variable (potential race condition)".to_string(),
-            cwe: Some("CWE-362".to_string()),
-            examples: vec!["Make static variable const".to_string()],
-        },
-        VulnerabilityPattern {
-            name: "Heap Corruption".to_string(),
-            pattern: r"(?i)\b(heap[-\s]corruption|heapArray|buffer[-\s]bounds|overrun)\b".to_string(),
-            severity: Severity::High,
-            category: Category::MemorySafety,
-            description: "Heap corruption or buffer overrun".to_string(),
-            cwe: Some("CWE-122".to_string()),
-            examples: vec!["Fix heap buffer overrun".to_string()],
-        },
-    ]
+    v
 }

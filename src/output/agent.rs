@@ -331,6 +331,16 @@ pub struct CompactVulnerability {
     pub cve: Vec<String>,
     /// Files changed (just basenames)
     pub files: Vec<String>,
+    /// Backport count: how many branches shipped this same fix (>1 = strong CVE signal)
+    #[serde(default = "default_bp")]
+    pub bp: usize,
+    /// Changed-lines diff snippet (source files only, capped) for triage
+    #[serde(default)]
+    pub diff: String,
+}
+
+fn default_bp() -> usize {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -418,6 +428,8 @@ impl CompactAgentReport {
                             .to_string()
                     })
                     .collect(),
+                bp: v.backport_count,
+                diff: v.diff_snippet,
             })
             .collect()
     }
@@ -713,6 +725,7 @@ impl AgentReport {
     }
 
     /// Generate pretty-printed JSON for debugging
+    #[allow(dead_code)] // debugging helper, kept for ad-hoc use
     pub fn generate_json_pretty(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(self)?)
     }
