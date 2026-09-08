@@ -23,9 +23,11 @@
                     <div class="file-findings-item priority-area-item"
                          data-filename="{{ file_data.file | lower }}"
                          data-total-findings="{{ file_data.total_findings }}"
-                         data-critical-findings="{{ file_data.high_risk_findings }}"
-                         data-medium-findings="{{ file_data.medium_risk_findings }}"
-                         data-low-findings="{{ file_data.low_risk_findings }}">
+                         data-critical-findings="{{ file_data.critical_findings }}"
+                         data-high-findings="{{ file_data.high_findings }}"
+                         data-medium-findings="{{ file_data.medium_findings }}"
+                         data-low-findings="{{ file_data.low_findings }}"
+                         data-info-findings="{{ file_data.info_findings }}">
                         <div class="file-header">
                             {% if file_data.file_url and file_data.file_url != 'null' %}
                                 <h4><a href="{{ file_data.file_url }}" target="_blank" class="file-link">{{ file_data.file }}</a></h4>
@@ -36,14 +38,20 @@
                         </div>
 
                         <div class="findings-breakdown">
-                            {% if file_data.high_risk_findings > 0 %}
-                                <span class="finding-badge high-risk">{{ file_data.high_risk_findings }} critical</span>
+                            {% if file_data.critical_findings > 0 %}
+                                <span class="finding-badge critical-risk">{{ file_data.critical_findings }} critical</span>
                             {% endif %}
-                            {% if file_data.medium_risk_findings > 0 %}
-                                <span class="finding-badge medium-risk">{{ file_data.medium_risk_findings }} medium</span>
+                            {% if file_data.high_findings > 0 %}
+                                <span class="finding-badge high-risk">{{ file_data.high_findings }} high</span>
                             {% endif %}
-                            {% if file_data.low_risk_findings > 0 %}
-                                <span class="finding-badge low-risk">{{ file_data.low_risk_findings }} low</span>
+                            {% if file_data.medium_findings > 0 %}
+                                <span class="finding-badge medium-risk">{{ file_data.medium_findings }} medium</span>
+                            {% endif %}
+                            {% if file_data.low_findings > 0 %}
+                                <span class="finding-badge low-risk">{{ file_data.low_findings }} low</span>
+                            {% endif %}
+                            {% if file_data.info_findings > 0 %}
+                                <span class="finding-badge info-risk">{{ file_data.info_findings }} info</span>
                             {% endif %}
                         </div>
 

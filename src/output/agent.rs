@@ -525,26 +525,14 @@ impl AgentReport {
         let mut all_cves: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         for finding in &findings.vulnerabilities {
-            // Count by severity (use highest severity pattern)
-            let max_severity = finding
-                .patterns_matched
-                .iter()
-                .map(|p| &p.severity)
-                .max_by_key(|s| match s {
-                    Severity::Critical => 5,
-                    Severity::High => 4,
-                    Severity::Medium => 3,
-                    Severity::Low => 2,
-                    Severity::Info => 1,
-                });
-
-            match max_severity {
-                Some(Severity::Critical) => critical += 1,
-                Some(Severity::High) => high += 1,
-                Some(Severity::Medium) => medium += 1,
-                Some(Severity::Low) => low += 1,
-                Some(Severity::Info) => info += 1,
-                None => {}
+            // Canonical severity, shared with the HTML report. See
+            // VulnerabilityFinding::severity.
+            match finding.severity() {
+                Severity::Critical => critical += 1,
+                Severity::High => high += 1,
+                Severity::Medium => medium += 1,
+                Severity::Low => low += 1,
+                Severity::Info => info += 1,
             }
 
             // Collect CVEs
@@ -579,13 +567,16 @@ impl AgentReport {
         sorted_findings
             .into_iter()
             .take(top_n)
-            .map(|v| AgentFinding {
+            .map(|v| {
+                // Compute before the struct partially moves out of `v`.
+                let severity = v.severity();
+                AgentFinding {
                 commit_id: v.commit_id,
                 commit_message: v.commit_message,
                 author: v.author,
                 date: v.date,
                 risk_score: v.risk_score,
-                severity: Self::get_max_severity(&v.patterns_matched),
+                severity,
                 patterns: v
                     .patterns_matched
                     .into_iter()
@@ -599,24 +590,11 @@ impl AgentReport {
                     .collect(),
                 cves: v.cve_references,
                 files_changed: v.files_changed,
+                }
             })
             .collect()
     }
 
-    fn get_max_severity(patterns: &[crate::patterns::PatternMatch]) -> Severity {
-        patterns
-            .iter()
-            .map(|p| &p.severity)
-            .max_by_key(|s| match s {
-                Severity::Critical => 5,
-                Severity::High => 4,
-                Severity::Medium => 3,
-                Severity::Low => 2,
-                Severity::Info => 1,
-            })
-            .cloned()
-            .unwrap_or(Severity::Info)
-    }
 
     fn extract_risk_files(findings: &CombinedFindings, top_n: usize) -> Vec<RiskFile> {
         let mut risk_files: Vec<RiskFile> = Vec::new();

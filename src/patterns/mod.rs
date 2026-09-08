@@ -60,6 +60,45 @@ pub enum Severity {
     Info,
 }
 
+impl Severity {
+    /// Ordering rank, highest first. Used to pick the worst severity of a set.
+    pub fn rank(&self) -> u8 {
+        match self {
+            Severity::Critical => 5,
+            Severity::High => 4,
+            Severity::Medium => 3,
+            Severity::Low => 2,
+            Severity::Info => 1,
+        }
+    }
+
+    /// Step this severity down `n` levels (Critical -> High -> ... -> Info).
+    pub fn demote(&self, n: u8) -> Severity {
+        let mut rank = self.rank().saturating_sub(n).max(1);
+        if rank > 5 {
+            rank = 5;
+        }
+        match rank {
+            5 => Severity::Critical,
+            4 => Severity::High,
+            3 => Severity::Medium,
+            2 => Severity::Low,
+            _ => Severity::Info,
+        }
+    }
+
+    /// Lowercase label used by every output format.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Critical => "critical",
+            Severity::High => "high",
+            Severity::Medium => "medium",
+            Severity::Low => "low",
+            Severity::Info => "info",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq, Hash)]
 pub enum Category {
     MemorySafety,
@@ -103,6 +142,42 @@ pub struct VulnerabilityFinding {
     /// Capped changed-lines diff snippet for downstream triage.
     #[serde(default)]
     pub diff_snippet: String,
+}
+
+impl VulnerabilityFinding {
+    /// Canonical severity of a finding: the highest declared severity among the
+    /// patterns it matched, capped by what the evidence score supports.
+    ///
+    /// This is the single source of truth for severity across every output
+    /// format. Do not re-derive severity from `risk_score`: the score is a
+    /// heuristic blend of pattern weight, churn and file age, so thresholding it
+    /// produces a different answer than the pattern's own classification and the
+    /// formats then disagree with each other.
+    pub fn severity(&self) -> Severity {
+        let class = self
+            .patterns_matched
+            .iter()
+            .map(|p| p.severity.clone())
+            .max_by_key(|s| s.rank())
+            .unwrap_or(Severity::Info);
+
+        // The pattern class is the answer: a commit whose message says it fixes
+        // a use-after-free is a critical-class security fix, and message-only
+        // matching is the normal case for commit mining rather than weak
+        // evidence. The one case that is genuinely not about this project's
+        // code is a commit that touches no source file at all, such as a
+        // dependency roll quoting an upstream changelog. Those drop hard.
+        let touches_source = self
+            .files_changed
+            .iter()
+            .any(|f| crate::patterns::engine::is_source_file(f));
+
+        if touches_source {
+            class
+        } else {
+            class.demote(3)
+        }
+    }
 }
 
 fn one() -> usize {
@@ -172,6 +247,23 @@ fn workerd(
     VulnerabilityPattern {
         lang_ext: cpp_exts(),
         ruleset: "workerd".to_string(),
+        ..msg(name, pattern, severity, category, cwe)
+    }
+}
+
+/// Rules for the bug classes the agent campaigns actually produce: broken
+/// authorization, injection, signature verification, replay, resource
+/// exhaustion and checker-soundness bugs. Matches message and diff.
+fn autovuln(
+    name: &str,
+    pattern: &str,
+    severity: Severity,
+    category: Category,
+    cwe: &str,
+) -> VulnerabilityPattern {
+    VulnerabilityPattern {
+        target: MatchTarget::Both,
+        ruleset: "autovuln".to_string(),
         ..msg(name, pattern, severity, category, cwe)
     }
 }
@@ -371,6 +463,190 @@ pub fn default_patterns() -> Vec<VulnerabilityPattern> {
             "CWE-611",
         ),
         // ---- Info-level corroboration (never dominates on its own) -----------
+        // ---- autovuln ruleset: the classes the campaigns keep finding -------
+        VulnerabilityPattern {
+            // "prepared statement" and "parameterized query" are the fix, not
+            // the bug: on workerd they matched 23 ordinary SQLite refactors.
+            require_near: vec!["inject".into(), "escap".into(), "sanitiz".into()],
+            ..autovuln(
+                "SQL Injection",
+                r"(?i)\b(sql[-\s]?inject\w*|sqli\b|unescaped\s+(?:identifier|table|column)|quote[-\s]?identifier)\b",
+                Severity::Critical,
+                Category::CodeInjection,
+                "CWE-89",
+            )
+        },
+        autovuln(
+            "Missing Access-Control Check",
+            r"(?i)\b(check_?can_|raise_for_access|access[-\s]?control\s+(?:check|callback)|permission\s+check|authoriz\w*\s+check|without\s+(?:checking|verifying)\s+permission)\b",
+            Severity::Critical,
+            Category::AuthenticationAuthorization,
+            "CWE-862",
+        ),
+        autovuln(
+            "Signature Verification Flaw",
+            r"(?i)\b(signature\s+(?:not\s+)?verif\w*|verify\s+signature|trust\w*\s+(?:the\s+)?embedded\s+key|unverified\s+(?:jwt|jws|cose|token)|alg\s*[:=]\s*none|key\s+attestation)\b",
+            Severity::Critical,
+            Category::Cryptography,
+            "CWE-347",
+        ),
+        autovuln(
+            "Replay / Nonce Reuse",
+            r"(?i)\b(replay[-\s]?attack|nonce\s+(?:reuse|not\s+checked|missing)|anti[-\s]?replay|proof[-\s]of[-\s]possession|c_?nonce|challenge\s+reuse)\b",
+            Severity::High,
+            Category::Cryptography,
+            "CWE-294",
+        ),
+        autovuln(
+            "Resource Exhaustion / DoS",
+            // A bare "dos" matched "DOs", Cloudflare's own abbreviation for
+            // Durable Objects, 30 times on workerd. Require the full phrase.
+            r"(?i)\b(denial[-\s]of[-\s]service|dos\s+attack|quadratic\s+(?:time|behaviou?r)|decompression\s+bomb|unbounded\s+(?:alloc\w*|loop|recursion)|memory\s+exhaust\w*|zip\s+bomb)\b",
+            Severity::High,
+            Category::InputValidation,
+            "CWE-400",
+        ),
+        autovuln(
+            "Incorrect Calculation / Checker Soundness",
+            r"(?i)\b(off[-\s]by[-\s]one|integer\s+(?:overflow|underflow)|incorrect\s+(?:bounds|offset|calculation)|stale\s+(?:offset|length|bounds)|unsound\w*|verifier\s+(?:accepts|bypass)|missing\s+(?:is64|width)\s+(?:gate|check))\b",
+            Severity::Critical,
+            Category::MemorySafety,
+            "CWE-682",
+        ),
+        autovuln(
+            "SSRF / Unvalidated URI",
+            r"(?i)\b(ssrf|server[-\s]side[-\s]request[-\s]forgery|arbitrary\s+ur[il]|no\s+(?:scheme|host)\s+allow[-\s]?list|prefix\s+(?:check|validat)\w*\s+missing)\b",
+            Severity::High,
+            Category::WebSecurity,
+            "CWE-918",
+        ),
+        // ---- OWASP Top 10 coverage ------------------------------------------
+        // A02 Cryptographic Failures
+        VulnerabilityPattern {
+            // Naming a hash is not a vulnerability. A runtime that implements
+            // WebCrypto mentions MD5 and SHA-1 as supported algorithms.
+            require_near: vec![
+                "weak".into(), "insecure".into(), "deprecat".into(),
+                "collision".into(), "downgrade".into(), "forbid".into(),
+            ],
+            ..autovuln(
+                "Weak Cryptography",
+                r"(?i)\b(md5|sha-?1|rc4|3des|ecb\s+mode|weak\s+(?:cipher|hash|crypto)|insecure\s+(?:cipher|hash)|deprecated\s+(?:cipher|algorithm))\b",
+                Severity::High,
+                Category::Cryptography,
+                "CWE-327",
+            )
+        },
+        autovuln(
+            "Insecure Randomness",
+            r"(?i)\b(math\.random|non-?cryptographic\s+(?:rng|random)|threadlocalrandom|insecure\s+random|predictable\s+(?:token|seed|key|nonce)|weak\s+(?:prng|entropy)|\brandom\(\))\b",
+            Severity::High,
+            Category::Cryptography,
+            "CWE-338",
+        ),
+        autovuln(
+            "Hardcoded Secret",
+            r"(?i)\b(hard-?coded\s+(?:secret|password|credential|key|token)|default\s+(?:password|credential|secret)|leaked\s+(?:secret|credential|api[-\s]?key)|secret\s+in\s+(?:source|repo|code))\b",
+            Severity::Critical,
+            Category::DataExposure,
+            "CWE-798",
+        ),
+        // A03 Injection
+        autovuln(
+            "Template Injection",
+            r"(?i)\b(server-?side\s+template\s+injection|\bssti\b|template\s+injection|jinja2?\s+(?:injection|sandbox\s+escape)|from_?string\s*\(\s*user)\b",
+            Severity::Critical,
+            Category::CodeInjection,
+            "CWE-1336",
+        ),
+        autovuln(
+            "NoSQL / LDAP Injection",
+            r"(?i)\b(nosql\s+injection|mongo\s+injection|ldap\s+injection|\$where\s+injection|operator\s+injection)\b",
+            Severity::High,
+            Category::CodeInjection,
+            "CWE-943",
+        ),
+        VulnerabilityPattern {
+            // A JS runtime touches __proto__ constantly. Only a pollution
+            // context makes it a finding.
+            require_near: vec!["pollut".into(), "inject".into(), "sanitiz".into()],
+            ..autovuln(
+                "Prototype Pollution",
+                r"(?i)\b(prototype\s+pollution|__proto__|constructor\.prototype\s+(?:pollution|assign))\b",
+                Severity::High,
+                Category::CodeInjection,
+                "CWE-1321",
+            )
+        },
+        // A01 Broken Access Control
+        autovuln(
+            "Open Redirect",
+            r"(?i)\b(open\s+redirect|unvalidated\s+redirect|redirect\s+to\s+(?:user|attacker)-?(?:controlled|supplied))\b",
+            Severity::Medium,
+            Category::WebSecurity,
+            "CWE-601",
+        ),
+        autovuln(
+            "Mass Assignment",
+            r"(?i)\b(mass\s+assignment|over-?posting|unfiltered\s+(?:bulk\s+)?assign\w*|allow_?list\s+of\s+fields)\b",
+            Severity::High,
+            Category::AuthenticationAuthorization,
+            "CWE-915",
+        ),
+        // A05 Security Misconfiguration
+        autovuln(
+            "CORS Misconfiguration",
+            r"(?i)\b(cors\s+(?:misconfig\w*|bypass)|access-control-allow-origin\s*[:=]\s*\*|allow-?credentials\s+with\s+wildcard|permissive\s+cors)\b",
+            Severity::High,
+            Category::WebSecurity,
+            "CWE-942",
+        ),
+        autovuln(
+            "Debug / Unsafe Default Enabled",
+            r"(?i)\b(debug\s+(?:mode\s+)?enabled\s+in\s+prod|stack\s+trace\s+(?:exposed|leaked)|directory\s+listing|insecure\s+default|disabled\s+(?:by\s+default\s+)?(?:tls|verification|sandbox))\b",
+            Severity::Medium,
+            Category::WebSecurity,
+            "CWE-16",
+        ),
+        // A07 Identification and Authentication Failures
+        autovuln(
+            "Authentication Failure",
+            r"(?i)\b(session\s+fixation|missing\s+(?:auth\w*|mfa)|auth\w*\s+(?:bypass|missing)\s+on\s+endpoint|unauthenticated\s+(?:access|endpoint|rce)|jwt\s+(?:forg\w*|none\s+alg|signature\s+skip))\b",
+            Severity::Critical,
+            Category::AuthenticationAuthorization,
+            "CWE-287",
+        ),
+        // A08 Software and Data Integrity Failures
+        autovuln(
+            "Supply-Chain / Integrity",
+            r"(?i)\b(unsigned\s+(?:update|artifact|package)|supply[-\s]chain|integrity\s+check\s+(?:missing|bypass)|checksum\s+not\s+verified|pickle\s+(?:load|rce))\b",
+            Severity::Critical,
+            Category::CodeInjection,
+            "CWE-494",
+        ),
+        // A09 Logging and Monitoring Failures
+        autovuln(
+            "Sensitive Data in Logs",
+            r"(?i)\b(log\w*\s+(?:the\s+)?(?:password|secret|token|credential|api[-\s]?key)|sensitive\s+data\s+in\s+logs?|log\s+injection|redact\w*\s+(?:secret|token))\b",
+            Severity::Medium,
+            Category::DataExposure,
+            "CWE-532",
+        ),
+        // A04 Insecure Design
+        autovuln(
+            "Missing Rate Limit",
+            r"(?i)\b(rate[-\s]?limit\w*\s+(?:missing|bypass|absent)|no\s+rate[-\s]?limit|brute[-\s]?force\s+(?:possible|protection))\b",
+            Severity::Medium,
+            Category::WebSecurity,
+            "CWE-770",
+        ),
+        autovuln(
+            "TOCTOU",
+            r"(?i)\b(toctou|time[-\s]of[-\s]check|check[-\s]then[-\s]use|re-?validate\s+after\s+check)\b",
+            Severity::High,
+            Category::Concurrency,
+            "CWE-367",
+        ),
         msg(
             "CVE Reference",
             r"(?i)\bcve[-\s]?(\d{4}[-\s]?\d{4,})\b",

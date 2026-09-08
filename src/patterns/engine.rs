@@ -41,7 +41,7 @@ fn diff_snippet(diff: &str, max: usize) -> String {
 
 /// Non-source paths that must not drive findings or the score: build output,
 /// translations, vendored code, lockfiles.
-fn is_artifact(path: &str) -> bool {
+pub fn is_artifact(path: &str) -> bool {
     let p = path.to_ascii_lowercase();
     p.starts_with("dist/")
         || p.contains("/dist/")
@@ -56,6 +56,18 @@ fn is_artifact(path: &str) -> bool {
         || p.contains("node_modules/")
         || p.ends_with("-lock.json")
         || p.ends_with("composer.lock")
+        // Dependency manifests: a roll commit quotes upstream changelogs, so it
+        // matches vulnerability vocabulary without touching this project's code.
+        || p == "deps"
+        || p.ends_with("/deps")
+        || p.ends_with("go.mod")
+        || p.ends_with("go.sum")
+        || p.ends_with("cargo.toml")
+        || p.ends_with("cargo.lock")
+        || p.ends_with("package.json")
+        || p.ends_with("yarn.lock")
+        || p.ends_with("pnpm-lock.yaml")
+        || p.ends_with("requirements.txt")
         || p.ends_with(".lock")
 }
 
@@ -71,7 +83,7 @@ fn is_test(path: &str) -> bool {
 
 /// A real source file: not an artifact and not a test. Tests are corroboration,
 /// not the primary changed surface.
-fn is_source_file(path: &str) -> bool {
+pub fn is_source_file(path: &str) -> bool {
     !is_artifact(path) && !is_test(path)
 }
 
@@ -94,6 +106,7 @@ impl PatternEngine {
             "crypto" => Self::get_crypto_patterns(),
             "web" | "php" => Self::get_web_patterns(),
             "workerd" | "cpp" => Self::get_workerd_patterns(),
+            "autovuln" => Self::get_autovuln_patterns(),
             "all" => default_patterns(),
             _ => Self::get_vuln_patterns(),
         };
@@ -272,11 +285,15 @@ impl PatternEngine {
 
         let mut score = base;
 
-        // Message-only evidence is weak in a mature repo (terse subjects).
-        if !has_diff_match {
-            score *= 0.5;
-        }
-        // No source touched → almost certainly noise (translations, build output).
+        // No source touched → almost certainly noise: a dependency roll or a
+        // translation commit quoting upstream vocabulary. This is the only
+        // discount, and it is the same condition that floors the severity.
+        //
+        // A message-only match is NOT weak evidence here: mining commit
+        // messages is what this tool does, and the vocabulary patterns are
+        // high-precision. Halving them made every genuine "fix UAF" commit
+        // render as a mid-yellow 4.5 while its severity said Critical, so the
+        // badge and the score contradicted each other on the common case.
         if source_files == 0 {
             score *= 0.3;
         }
@@ -358,6 +375,27 @@ impl PatternEngine {
             .filter(|p| {
                 p.ruleset == "workerd"
                     || matches!(p.category, Category::MemorySafety | Category::Concurrency)
+            })
+            .collect()
+    }
+
+    /// The classes the agent campaigns keep producing: broken authorization,
+    /// injection, signature verification, replay, resource exhaustion and
+    /// checker-soundness bugs. The explicitly tagged autovuln rules plus the
+    /// general logic-bug categories.
+    fn get_autovuln_patterns() -> Vec<VulnerabilityPattern> {
+        default_patterns()
+            .into_iter()
+            .filter(|p| {
+                p.ruleset == "autovuln"
+                    || matches!(
+                        p.category,
+                        Category::AuthenticationAuthorization
+                            | Category::CodeInjection
+                            | Category::WebSecurity
+                            | Category::InputValidation
+                            | Category::Cryptography
+                    )
             })
             .collect()
     }

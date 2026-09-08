@@ -1,4 +1,5 @@
 use super::*;
+use crate::patterns::Severity;
 use crate::analysis::CombinedFindings;
 use crate::git::RepositoryLinker;
 use crate::patterns::VulnerabilityFinding;
@@ -221,21 +222,30 @@ impl HtmlGenerator {
         let mut priority_files: Vec<_> = file_findings
             .iter()
             .map(|(file, findings_vec)| {
-                let high_risk_count = findings_vec.iter().filter(|f| f.risk_score >= 7.0).count();
-                let medium_risk_count = findings_vec
-                    .iter()
-                    .filter(|f| f.risk_score >= 4.0 && f.risk_score < 7.0)
-                    .count();
-                let low_risk_count = findings_vec.iter().filter(|f| f.risk_score < 4.0).count();
+                // Canonical severity, same source as the vulnerability list and
+                // the agent-json summary. See VulnerabilityFinding::severity.
+                let count_of = |want: Severity| {
+                    findings_vec
+                        .iter()
+                        .filter(|f| f.severity().rank() == want.rank())
+                        .count()
+                };
+                let critical_count = count_of(Severity::Critical);
+                let high_risk_count = count_of(Severity::High);
+                let medium_risk_count = count_of(Severity::Medium);
+                let low_risk_count = count_of(Severity::Low);
+                let info_count = count_of(Severity::Info);
 
                 let file_url = linker.get_file_url(file, None);
 
                 (
                     file,
                     findings_vec.len(),
+                    critical_count,
                     high_risk_count,
                     medium_risk_count,
                     low_risk_count,
+                    info_count,
                     file_url,
                 )
             })
@@ -247,7 +257,16 @@ impl HtmlGenerator {
             .into_iter()
             .take(15) // Show top 15 files with most findings
             .map(
-                |(file, total_count, high_count, medium_count, low_count, file_url)| {
+                |(
+                    file,
+                    total_count,
+                    critical_count,
+                    high_count,
+                    medium_count,
+                    low_count,
+                    info_count,
+                    file_url,
+                )| {
                     // Find the most recent commit that modified this file
                     let recent_commit = findings.git_stats.file_history.get(file)
                         .and_then(|history| {
@@ -286,7 +305,8 @@ impl HtmlGenerator {
                                 "commit_url": commit_url,
                                 "diff_url": diff_url,
                                 "risk_score": finding.risk_score,
-                                "severity_class": self.get_severity_class(finding.risk_score),
+                                "severity_class": format!("severity-{}", finding.severity().as_str()),
+                                "severity_text": finding.severity().as_str(),
                                 "patterns_matched": finding.patterns_matched,
                                 "date": finding.date,
                                 "author": finding.author
@@ -297,9 +317,11 @@ impl HtmlGenerator {
                     json!({
                         "file": file,
                         "total_findings": total_count,
-                        "high_risk_findings": high_count,
-                        "medium_risk_findings": medium_count,
-                        "low_risk_findings": low_count,
+                        "critical_findings": critical_count,
+                        "high_findings": high_count,
+                        "medium_findings": medium_count,
+                        "low_findings": low_count,
+                        "info_findings": info_count,
                         "file_url": file_url,
                         "recent_commit_id": recent_commit,
                         "commit_id_short": commit_id_short,
@@ -393,9 +415,9 @@ impl HtmlGenerator {
                 "patterns_matched": vuln.patterns_matched,
                 "risk_score": vuln.risk_score,
                 "cve_references": vuln.cve_references,
-                "severity_class": self.get_severity_class(vuln.risk_score),
+                "severity_class": format!("severity-{}", vuln.severity().as_str()),
                 "risk_class": self.get_risk_class(vuln.risk_score),
-                "severity_text": self.get_severity_text(vuln.risk_score),
+                "severity_text": vuln.severity().as_str(),
                 "commit_url": commit_url,
                 "diff_url": diff_url,
                 "issue_links": issue_links,
@@ -534,19 +556,6 @@ impl HtmlGenerator {
         HeatmapData { files, stats }
     }
 
-    fn get_severity_class(&self, risk_score: f64) -> &'static str {
-        if risk_score >= 8.0 {
-            "severity-critical"
-        } else if risk_score >= 6.0 {
-            "severity-high"
-        } else if risk_score >= 4.0 {
-            "severity-medium"
-        } else if risk_score >= 2.0 {
-            "severity-low"
-        } else {
-            "severity-info"
-        }
-    }
 
     fn get_risk_class(&self, risk_score: f64) -> &'static str {
         if risk_score >= 8.0 {
@@ -560,19 +569,6 @@ impl HtmlGenerator {
         }
     }
 
-    fn get_severity_text(&self, risk_score: f64) -> &'static str {
-        if risk_score >= 8.0 {
-            "critical"
-        } else if risk_score >= 6.0 {
-            "high"
-        } else if risk_score >= 4.0 {
-            "medium"
-        } else if risk_score >= 2.0 {
-            "low"
-        } else {
-            "info"
-        }
-    }
 
     fn calculate_extension_distribution(&self, files: &[String]) -> Vec<serde_json::Value> {
         let mut extension_counts = HashMap::new();
