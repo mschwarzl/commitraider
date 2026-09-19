@@ -1,5 +1,5 @@
-use std::path::Path;
 use anyhow::Result;
+use std::path::Path;
 
 use super::ComplexityMetrics;
 
@@ -10,7 +10,11 @@ impl ComplexityCalculator {
         Self
     }
 
-    pub fn calculate_complexity_metrics(&self, lines: &[&str], file_path: &Path) -> Result<ComplexityMetrics> {
+    pub fn calculate_complexity_metrics(
+        &self,
+        lines: &[&str],
+        file_path: &Path,
+    ) -> Result<ComplexityMetrics> {
         let function_count = self.calculate_function_count(lines, file_path);
         let max_nesting = self.calculate_max_nesting(lines);
         let cyclomatic_complexity = self.calculate_cyclomatic_complexity(lines, file_path)?;
@@ -33,10 +37,7 @@ impl ComplexityCalculator {
     }
 
     fn calculate_function_count(&self, lines: &[&str], file_path: &Path) -> usize {
-        let extension = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         lines
             .iter()
@@ -44,35 +45,39 @@ impl ComplexityCalculator {
                 let line = line.trim();
                 match extension {
                     "rs" => {
-                        line.starts_with("fn ") || line.contains(" fn ") ||
-                        line.starts_with("async fn ") || line.contains(" async fn ")
+                        line.starts_with("fn ")
+                            || line.contains(" fn ")
+                            || line.starts_with("async fn ")
+                            || line.contains(" async fn ")
                     }
-                    "py" => {
-                        line.starts_with("def ") || line.starts_with("async def ")
-                    }
+                    "py" => line.starts_with("def ") || line.starts_with("async def "),
                     "js" | "ts" | "jsx" | "tsx" => {
-                        line.contains("function ") || line.contains("=> {") ||
-                        line.contains("async function") || line.contains("function*")
+                        line.contains("function ")
+                            || line.contains("=> {")
+                            || line.contains("async function")
+                            || line.contains("function*")
                     }
                     "java" | "cs" => {
-                        (line.contains(" void ") || line.contains(" int ") || line.contains(" string ") ||
-                         line.contains(" bool ") || line.contains(" double ") || line.contains(" float ")) &&
-                        line.contains("(") && !line.contains("=")
+                        (line.contains(" void ")
+                            || line.contains(" int ")
+                            || line.contains(" string ")
+                            || line.contains(" bool ")
+                            || line.contains(" double ")
+                            || line.contains(" float "))
+                            && line.contains("(")
+                            && !line.contains("=")
                     }
                     "cpp" | "c" | "h" | "hpp" | "cc" | "cxx" => {
-                        (line.contains("(") && line.contains(")") && line.contains("{")) ||
-                        (line.starts_with("static ") || line.starts_with("extern ") ||
-                         line.contains(" main(") || line.contains("void ") || line.contains("int "))
+                        (line.contains("(") && line.contains(")") && line.contains("{"))
+                            || (line.starts_with("static ")
+                                || line.starts_with("extern ")
+                                || line.contains(" main(")
+                                || line.contains("void ")
+                                || line.contains("int "))
                     }
-                    "go" => {
-                        line.starts_with("func ") || line.contains(" func ")
-                    }
-                    "rb" => {
-                        line.starts_with("def ") || line.contains(" def ")
-                    }
-                    "php" => {
-                        line.contains("function ") || line.starts_with("function ")
-                    }
+                    "go" => line.starts_with("func ") || line.contains(" func "),
+                    "rb" => line.starts_with("def ") || line.contains(" def "),
+                    "php" => line.contains("function ") || line.starts_with("function "),
                     _ => {
                         line.contains("function ") || line.contains("def ") || line.contains("fn ")
                     }
@@ -82,10 +87,7 @@ impl ComplexityCalculator {
     }
 
     fn calculate_cyclomatic_complexity(&self, lines: &[&str], file_path: &Path) -> Result<f64> {
-        let extension = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         let mut complexity = 1.0; // Base complexity
 
@@ -93,8 +95,12 @@ impl ComplexityCalculator {
             let line = line.trim();
 
             // Skip comments and empty lines
-            if line.is_empty() || line.starts_with("//") || line.starts_with('#')
-                || line.starts_with("/*") || line.starts_with('*') {
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with('#')
+                || line.starts_with("/*")
+                || line.starts_with('*')
+            {
                 continue;
             }
 
@@ -119,11 +125,21 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if ") || line.contains("else if ") { complexity += 1.0; }
-        if line.contains("match ") { complexity += 1.0; }
-        if line.contains("for ") || line.contains("while ") || line.contains("loop ") { complexity += 1.0; }
-        if line.contains("?") && !line.contains("\"") { complexity += 1.0; } // Error propagation
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if ") || line.contains("else if ") {
+            complexity += 1.0;
+        }
+        if line.contains("match ") {
+            complexity += 1.0;
+        }
+        if line.contains("for ") || line.contains("while ") || line.contains("loop ") {
+            complexity += 1.0;
+        }
+        if line.contains("?") && !line.contains("\"") {
+            complexity += 1.0;
+        } // Error propagation
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         // Pattern matching arms
         complexity += (line.matches("=>").count() as f64) * 0.5;
@@ -135,14 +151,26 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.starts_with("if ") || line.contains(" if ") { complexity += 1.0; }
-        if line.starts_with("elif ") { complexity += 1.0; }
-        if line.starts_with("for ") || line.starts_with("while ") { complexity += 1.0; }
-        if line.starts_with("try:") || line.starts_with("except ") { complexity += 1.0; }
-        if line.contains(" and ") || line.contains(" or ") { complexity += 0.5; }
+        if line.starts_with("if ") || line.contains(" if ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("elif ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("for ") || line.starts_with("while ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("try:") || line.starts_with("except ") {
+            complexity += 1.0;
+        }
+        if line.contains(" and ") || line.contains(" or ") {
+            complexity += 0.5;
+        }
 
         // List/dict comprehensions
-        if line.contains(" for ") && (line.contains("[") || line.contains("{")) { complexity += 1.0; }
+        if line.contains(" for ") && (line.contains("[") || line.contains("{")) {
+            complexity += 1.0;
+        }
 
         complexity
     }
@@ -151,14 +179,30 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if (") || line.contains("if(") { complexity += 1.0; }
-        if line.contains("else if") { complexity += 1.0; }
-        if line.contains("for (") || line.contains("for(") { complexity += 1.0; }
-        if line.contains("while (") || line.contains("while(") { complexity += 1.0; }
-        if line.contains("switch ") { complexity += 1.0; }
-        if line.contains("case ") { complexity += 0.5; }
-        if line.contains("try {") || line.contains("catch (") { complexity += 1.0; }
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if (") || line.contains("if(") {
+            complexity += 1.0;
+        }
+        if line.contains("else if") {
+            complexity += 1.0;
+        }
+        if line.contains("for (") || line.contains("for(") {
+            complexity += 1.0;
+        }
+        if line.contains("while (") || line.contains("while(") {
+            complexity += 1.0;
+        }
+        if line.contains("switch ") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") {
+            complexity += 0.5;
+        }
+        if line.contains("try {") || line.contains("catch (") {
+            complexity += 1.0;
+        }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         // Ternary operators
         complexity += (line.matches("?").count() as f64) * 0.5;
@@ -170,14 +214,30 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if (") || line.contains("if(") { complexity += 1.0; }
-        if line.contains("else if") { complexity += 1.0; }
-        if line.contains("for (") || line.contains("for(") { complexity += 1.0; }
-        if line.contains("while (") || line.contains("while(") { complexity += 1.0; }
-        if line.contains("switch (") { complexity += 1.0; }
-        if line.contains("case ") { complexity += 0.5; }
-        if line.contains("try {") || line.contains("catch (") { complexity += 1.0; }
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if (") || line.contains("if(") {
+            complexity += 1.0;
+        }
+        if line.contains("else if") {
+            complexity += 1.0;
+        }
+        if line.contains("for (") || line.contains("for(") {
+            complexity += 1.0;
+        }
+        if line.contains("while (") || line.contains("while(") {
+            complexity += 1.0;
+        }
+        if line.contains("switch (") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") {
+            complexity += 0.5;
+        }
+        if line.contains("try {") || line.contains("catch (") {
+            complexity += 1.0;
+        }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         complexity
     }
@@ -186,16 +246,32 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Basic control flow
-        if line.contains("if (") || line.contains("if(") { complexity += 1.0; }
-        if line.contains("else if") { complexity += 1.0; }
-        if line.contains("for (") || line.contains("for(") { complexity += 1.0; }
-        if line.contains("while (") || line.contains("while(") { complexity += 1.0; }
-        if line.contains("do {") || line.contains("do\n") { complexity += 1.0; }
-        if line.contains("switch (") { complexity += 1.0; }
-        if line.contains("case ") && line.contains(":") { complexity += 0.5; }
+        if line.contains("if (") || line.contains("if(") {
+            complexity += 1.0;
+        }
+        if line.contains("else if") {
+            complexity += 1.0;
+        }
+        if line.contains("for (") || line.contains("for(") {
+            complexity += 1.0;
+        }
+        if line.contains("while (") || line.contains("while(") {
+            complexity += 1.0;
+        }
+        if line.contains("do {") || line.contains("do\n") {
+            complexity += 1.0;
+        }
+        if line.contains("switch (") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") && line.contains(":") {
+            complexity += 0.5;
+        }
 
         // Logical operators
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         // Ternary operators
         complexity += (line.matches("?").count() as f64) * 0.5;
@@ -209,22 +285,39 @@ impl ComplexityCalculator {
         if line.contains("malloc(") || line.contains("calloc(") || line.contains("realloc(") {
             complexity += 1.5; // Memory allocation adds complexity
         }
-        if line.contains("free(") { complexity += 1.0; }
-        if line.contains("new ") || line.contains("delete ") { complexity += 1.0; }
+        if line.contains("free(") {
+            complexity += 1.0;
+        }
+        if line.contains("new ") || line.contains("delete ") {
+            complexity += 1.0;
+        }
 
         // Pointer arithmetic (security-relevant complexity)
         if line.contains("++") || line.contains("--") {
-            if line.contains("*") { complexity += 1.5; } // Pointer increment/decrement
-            else { complexity += 0.5; }
+            if line.contains("*") {
+                complexity += 1.5;
+            }
+            // Pointer increment/decrement
+            else {
+                complexity += 0.5;
+            }
         }
 
         // Function pointers and callbacks
-        if line.contains("(*") && line.contains(")(") { complexity += 2.0; }
-        if line.contains("->") { complexity += 0.5; } // Member access through pointer
+        if line.contains("(*") && line.contains(")(") {
+            complexity += 2.0;
+        }
+        if line.contains("->") {
+            complexity += 0.5;
+        } // Member access through pointer
 
         // Preprocessor directives (can hide complexity)
-        if line.trim().starts_with("#if") || line.trim().starts_with("#ifdef") ||
-           line.trim().starts_with("#ifndef") { complexity += 1.0; }
+        if line.trim().starts_with("#if")
+            || line.trim().starts_with("#ifdef")
+            || line.trim().starts_with("#ifndef")
+        {
+            complexity += 1.0;
+        }
         if line.trim().starts_with("#else") || line.trim().starts_with("#elif") {
             complexity += 0.5;
         }
@@ -235,13 +328,19 @@ impl ComplexityCalculator {
         }
 
         // Assembly inline (high complexity)
-        if line.contains("__asm") || line.contains("asm(") { complexity += 3.0; }
+        if line.contains("__asm") || line.contains("asm(") {
+            complexity += 3.0;
+        }
 
         // Goto statements (discouraged, high complexity)
-        if line.contains("goto ") { complexity += 2.5; }
+        if line.contains("goto ") {
+            complexity += 2.5;
+        }
 
         // setjmp/longjmp (non-local jumps, very complex)
-        if line.contains("setjmp(") || line.contains("longjmp(") { complexity += 3.0; }
+        if line.contains("setjmp(") || line.contains("longjmp(") {
+            complexity += 3.0;
+        }
 
         // Variadic functions
         if line.contains("va_start") || line.contains("va_arg") || line.contains("...") {
@@ -249,12 +348,23 @@ impl ComplexityCalculator {
         }
 
         // Buffer operations (security-critical)
-        if line.contains("strcpy(") || line.contains("strcat(") || line.contains("sprintf(") ||
-           line.contains("gets(") || line.contains("scanf(") { complexity += 2.0; }
+        if line.contains("strcpy(")
+            || line.contains("strcat(")
+            || line.contains("sprintf(")
+            || line.contains("gets(")
+            || line.contains("scanf(")
+        {
+            complexity += 2.0;
+        }
 
         // Safer alternatives (still complex but better)
-        if line.contains("strncpy(") || line.contains("strncat(") || line.contains("snprintf(") ||
-           line.contains("fgets(") { complexity += 1.0; }
+        if line.contains("strncpy(")
+            || line.contains("strncat(")
+            || line.contains("snprintf(")
+            || line.contains("fgets(")
+        {
+            complexity += 1.0;
+        }
 
         // Thread synchronization (high complexity)
         if line.contains("pthread_") || line.contains("mutex") || line.contains("semaphore") {
@@ -262,13 +372,18 @@ impl ComplexityCalculator {
         }
 
         // Signal handling
-        if line.contains("signal(") || line.contains("sigaction(") { complexity += 2.0; }
+        if line.contains("signal(") || line.contains("sigaction(") {
+            complexity += 2.0;
+        }
 
         // Type casting (can hide issues)
-        if line.matches("(").count() >= 2 && (
-            line.contains("int*") || line.contains("char*") || line.contains("void*") ||
-            line.contains("**)") || line.contains("(*)")
-        ) {
+        if line.matches("(").count() >= 2
+            && (line.contains("int*")
+                || line.contains("char*")
+                || line.contains("void*")
+                || line.contains("**)")
+                || line.contains("(*)"))
+        {
             complexity += 1.0;
         }
 
@@ -279,15 +394,29 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if ") { complexity += 1.0; }
-        if line.contains("for ") { complexity += 1.0; }
-        if line.contains("switch ") { complexity += 1.0; }
-        if line.contains("case ") { complexity += 0.5; }
-        if line.contains("select {") { complexity += 1.0; }
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if ") {
+            complexity += 1.0;
+        }
+        if line.contains("for ") {
+            complexity += 1.0;
+        }
+        if line.contains("switch ") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") {
+            complexity += 0.5;
+        }
+        if line.contains("select {") {
+            complexity += 1.0;
+        }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         // Error handling
-        if line.contains("if err != nil") { complexity += 1.0; }
+        if line.contains("if err != nil") {
+            complexity += 1.0;
+        }
 
         complexity
     }
@@ -296,14 +425,26 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.starts_with("if ") || line.contains(" if ") { complexity += 1.0; }
-        if line.starts_with("elsif ") { complexity += 1.0; }
-        if line.starts_with("for ") || line.starts_with("while ") { complexity += 1.0; }
-        if line.starts_with("case ") || line.starts_with("when ") { complexity += 0.5; }
-        if line.contains(" and ") || line.contains(" or ") { complexity += 0.5; }
+        if line.starts_with("if ") || line.contains(" if ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("elsif ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("for ") || line.starts_with("while ") {
+            complexity += 1.0;
+        }
+        if line.starts_with("case ") || line.starts_with("when ") {
+            complexity += 0.5;
+        }
+        if line.contains(" and ") || line.contains(" or ") {
+            complexity += 0.5;
+        }
 
         // Blocks
-        if line.contains(" do ") || line.contains(" { ") { complexity += 0.5; }
+        if line.contains(" do ") || line.contains(" { ") {
+            complexity += 0.5;
+        }
 
         complexity
     }
@@ -312,14 +453,30 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if (") || line.contains("if(") { complexity += 1.0; }
-        if line.contains("elseif ") { complexity += 1.0; }
-        if line.contains("for (") || line.contains("foreach (") { complexity += 1.0; }
-        if line.contains("while (") { complexity += 1.0; }
-        if line.contains("switch (") { complexity += 1.0; }
-        if line.contains("case ") { complexity += 0.5; }
-        if line.contains("try {") || line.contains("catch (") { complexity += 1.0; }
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if (") || line.contains("if(") {
+            complexity += 1.0;
+        }
+        if line.contains("elseif ") {
+            complexity += 1.0;
+        }
+        if line.contains("for (") || line.contains("foreach (") {
+            complexity += 1.0;
+        }
+        if line.contains("while (") {
+            complexity += 1.0;
+        }
+        if line.contains("switch (") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") {
+            complexity += 0.5;
+        }
+        if line.contains("try {") || line.contains("catch (") {
+            complexity += 1.0;
+        }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         complexity
     }
@@ -328,17 +485,35 @@ impl ComplexityCalculator {
         let mut complexity = 0.0;
 
         // Control flow
-        if line.contains("if (") || line.contains("if(") { complexity += 1.0; }
-        if line.contains("else if") { complexity += 1.0; }
-        if line.contains("for (") || line.contains("foreach (") { complexity += 1.0; }
-        if line.contains("while (") { complexity += 1.0; }
-        if line.contains("switch (") { complexity += 1.0; }
-        if line.contains("case ") { complexity += 0.5; }
-        if line.contains("try {") || line.contains("catch (") { complexity += 1.0; }
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("if (") || line.contains("if(") {
+            complexity += 1.0;
+        }
+        if line.contains("else if") {
+            complexity += 1.0;
+        }
+        if line.contains("for (") || line.contains("foreach (") {
+            complexity += 1.0;
+        }
+        if line.contains("while (") {
+            complexity += 1.0;
+        }
+        if line.contains("switch (") {
+            complexity += 1.0;
+        }
+        if line.contains("case ") {
+            complexity += 0.5;
+        }
+        if line.contains("try {") || line.contains("catch (") {
+            complexity += 1.0;
+        }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         // LINQ
-        if line.contains(".Where(") || line.contains(".Select(") { complexity += 0.5; }
+        if line.contains(".Where(") || line.contains(".Select(") {
+            complexity += 0.5;
+        }
 
         complexity
     }
@@ -353,16 +528,15 @@ impl ComplexityCalculator {
         }
 
         // Logical operators
-        if line.contains("&&") || line.contains("||") { complexity += 0.5; }
+        if line.contains("&&") || line.contains("||") {
+            complexity += 0.5;
+        }
 
         complexity
     }
 
     fn calculate_cognitive_complexity(&self, lines: &[&str], file_path: &Path) -> Result<f64> {
-        let extension = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let extension = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
         let mut cognitive_complexity = 0.0;
         let mut nesting_level = 0;
@@ -372,8 +546,12 @@ impl ComplexityCalculator {
             let line = line.trim();
 
             // Skip comments and empty lines
-            if line.is_empty() || line.starts_with("//") || line.starts_with('#')
-                || line.starts_with("/*") || line.starts_with('*') {
+            if line.is_empty()
+                || line.starts_with("//")
+                || line.starts_with('#')
+                || line.starts_with("/*")
+                || line.starts_with('*')
+            {
                 continue;
             }
 
@@ -383,7 +561,8 @@ impl ComplexityCalculator {
             nesting_level = nesting_level.max(0);
 
             // Calculate cognitive complexity increment based on constructs
-            let increment = self.calculate_cognitive_increment(line, extension, nesting_level, &mut in_switch);
+            let increment =
+                self.calculate_cognitive_increment(line, extension, nesting_level, &mut in_switch);
             cognitive_complexity += increment;
 
             // Special handling for closing braces that reduce nesting
@@ -406,25 +585,36 @@ impl ComplexityCalculator {
                 // Python uses indentation
                 let _indent_level = (line.len() - line.trim_start().len()) / 4;
                 // This is simplified - proper implementation would track indentation changes
-                if line.trim_start().starts_with("if ") ||
-                   line.trim_start().starts_with("for ") ||
-                   line.trim_start().starts_with("while ") ||
-                   line.trim_start().starts_with("try:") ||
-                   line.trim_start().starts_with("with ") {
+                if line.trim_start().starts_with("if ")
+                    || line.trim_start().starts_with("for ")
+                    || line.trim_start().starts_with("while ")
+                    || line.trim_start().starts_with("try:")
+                    || line.trim_start().starts_with("with ")
+                {
                     increment += 1;
                 }
             }
             _ => {
                 // Brace-based languages
-                if line.contains("{") { increment += 1; }
-                if line.contains("}") { increment -= 1; }
+                if line.contains("{") {
+                    increment += 1;
+                }
+                if line.contains("}") {
+                    increment -= 1;
+                }
             }
         }
 
         increment
     }
 
-    fn calculate_cognitive_increment(&self, line: &str, extension: &str, nesting_level: i32, in_switch: &mut bool) -> f64 {
+    fn calculate_cognitive_increment(
+        &self,
+        line: &str,
+        extension: &str,
+        nesting_level: i32,
+        in_switch: &mut bool,
+    ) -> f64 {
         let mut increment = 0.0;
         let nesting_penalty = nesting_level.max(0) as f64;
 

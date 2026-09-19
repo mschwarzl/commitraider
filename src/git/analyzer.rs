@@ -1,11 +1,11 @@
 use super::*;
 use anyhow::{Context, Result};
-use chrono::{TimeZone, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use git2::{DiffFindOptions, DiffFormat, DiffOptions, Oid, Repository, Sort};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use regex::RegexSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tracing::{debug, info, warn};
 
@@ -194,54 +194,16 @@ impl GitAnalyzer {
             return Ok(());
         }
 
-        let pb = ProgressBar::new(commit_oids.len() as u64);
-        pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} commits ({eta})"
-            )
-            .unwrap()
-            .progress_chars("#>-")
-        );
-
-        // Read every commit through libgit2 in this process. There are no `git`
-        // subprocesses: the old code spawned two per commit, which on a 20k
-        // commit repository meant 40k fork/exec calls, and on macOS each one
-        // also paid for the /usr/bin/git xcselect shim re-exec.
-        //
-        // Work is split into contiguous chunks, one libgit2 handle per chunk,
-        // because locality dominates here - see MIN_COMMITS_PER_CHUNK.
-        let threads = rayon::current_num_threads().max(1);
-        let chunk_size = commit_oids
-            .len()
-            .div_ceil(threads)
-            .max(MIN_COMMITS_PER_CHUNK);
-        let repo_path = self.path.clone();
-
-        let commit_infos: Vec<CommitInfo> = commit_oids
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                // One handle per chunk; it never crosses a thread boundary.
-                let repo = match Repository::open(&repo_path) {
-                    Ok(repo) => repo,
-                    Err(e) => {
-                        debug!("Could not open repository on worker: {}", e);
-                        return Vec::new();
-                    }
-                };
-
-                let mut out = Vec::with_capacity(chunk.len());
-                for &oid in chunk {
-                    if let Some(info) = Self::build_commit_info(&repo, oid) {
-                        out.push(info);
-                    }
-                    pb.inc(1);
-                }
-                out
-            })
-            .flatten()
-            .collect();
-
-        pb.finish_with_message("Commit analysis complete");
+        let commit_infos = if Self::pack_exceeds_available_memory(&self.path) {
+            info!(
+                "Repository pack exceeds available memory; using the sequential \
+                 native-git strategy instead of the chunked-parallel libgit2 walk \
+                 (see `pack_exceeds_available_memory` for why)."
+            );
+            Self::analyze_commits_bulk_native(&self.path, commit_oids.len()).await?
+        } else {
+            self.commit_infos_via_parallel_libgit2(commit_oids)
+        };
 
         // A commit whose files we can name but whose contents we cannot read is
         // one whose blobs are absent locally. We never fetch them, so say how
@@ -279,6 +241,61 @@ impl GitAnalyzer {
         }
 
         Ok(())
+    }
+
+    /// Read every commit through libgit2 in this process. There are no `git`
+    /// subprocesses: the old code spawned two per commit, which on a 20k
+    /// commit repository meant 40k fork/exec calls, and on macOS each one
+    /// also paid for the /usr/bin/git xcselect shim re-exec.
+    ///
+    /// Work is split into contiguous chunks, one libgit2 handle per chunk,
+    /// because locality dominates here - see `MIN_COMMITS_PER_CHUNK`. This is
+    /// the fast path when the repository's pack fits in available memory; see
+    /// `pack_exceeds_available_memory` for when `analyze_commits` instead uses
+    /// `analyze_commits_bulk_native`.
+    fn commit_infos_via_parallel_libgit2(&self, commit_oids: Vec<Oid>) -> Vec<CommitInfo> {
+        let pb = ProgressBar::new(commit_oids.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {pos}/{len} commits ({eta})"
+            )
+            .unwrap()
+            .progress_chars("#>-")
+        );
+
+        let threads = rayon::current_num_threads().max(1);
+        let chunk_size = commit_oids
+            .len()
+            .div_ceil(threads)
+            .max(MIN_COMMITS_PER_CHUNK);
+        let repo_path = self.path.clone();
+
+        let commit_infos: Vec<CommitInfo> = commit_oids
+            .par_chunks(chunk_size)
+            .map(|chunk| {
+                // One handle per chunk; it never crosses a thread boundary.
+                let repo = match Repository::open(&repo_path) {
+                    Ok(repo) => repo,
+                    Err(e) => {
+                        debug!("Could not open repository on worker: {}", e);
+                        return Vec::new();
+                    }
+                };
+
+                let mut out = Vec::with_capacity(chunk.len());
+                for &oid in chunk {
+                    if let Some(info) = Self::build_commit_info(&repo, oid) {
+                        out.push(info);
+                    }
+                    pb.inc(1);
+                }
+                out
+            })
+            .flatten()
+            .collect();
+
+        pb.finish_with_message("Commit analysis complete");
+        commit_infos
     }
 
     /// Build one `CommitInfo` from libgit2 alone.
@@ -470,6 +487,225 @@ impl GitAnalyzer {
         result
     }
 
+    /// Whether the repository's on-disk pack data is bigger than the memory
+    /// available to cache it. Below this line, libgit2's chunked-parallel walk
+    /// (see `MIN_COMMITS_PER_CHUNK`) is the faster strategy: object lookups hit
+    /// a warm page cache and threads add real throughput. Above it, chunking
+    /// splits history into far-apart slices that each need their own working
+    /// set, so N threads compete for cache instead of sharing it, and a single
+    /// sequential `git log` walk - which only ever needs a sliding window of
+    /// history, since consecutive commits share most of their tree - wins by a
+    /// wide margin (measured ~70-170x on a 65 GB / ~11 GB available repo).
+    fn pack_exceeds_available_memory(repo_path: &Path) -> bool {
+        let pack_bytes = Self::total_pack_bytes(repo_path);
+        let available_bytes = Self::available_memory_bytes();
+        pack_bytes > available_bytes
+    }
+
+    /// Sum of `*.pack` files under the repository's object store. Zero (and so
+    /// "small enough") if the directory cannot be read, which keeps the
+    /// existing libgit2 path as the safe default when this check is
+    /// inconclusive rather than silently switching strategy.
+    fn total_pack_bytes(repo_path: &Path) -> u64 {
+        let pack_dir = repo_path.join(".git/objects/pack");
+        let pack_dir = if pack_dir.is_dir() {
+            pack_dir
+        } else {
+            repo_path.join("objects/pack") // bare repository layout
+        };
+
+        let Ok(entries) = std::fs::read_dir(&pack_dir) else {
+            return 0;
+        };
+
+        entries
+            .flatten()
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "pack"))
+            .filter_map(|entry| entry.metadata().ok())
+            .map(|meta| meta.len())
+            .sum()
+    }
+
+    /// `MemAvailable` from `/proc/meminfo`, in bytes. `u64::MAX` (so "assume
+    /// plenty of memory", i.e. never switch strategy) when unavailable, which
+    /// is the case on any non-Linux platform this runs on.
+    fn available_memory_bytes() -> u64 {
+        let Ok(contents) = std::fs::read_to_string("/proc/meminfo") else {
+            return u64::MAX;
+        };
+        Self::parse_mem_available_kb(&contents)
+            .map(|kb| kb.saturating_mul(1024))
+            .unwrap_or(u64::MAX)
+    }
+
+    fn parse_mem_available_kb(meminfo: &str) -> Option<u64> {
+        meminfo
+            .lines()
+            .find_map(|line| line.strip_prefix("MemAvailable:"))
+            .and_then(|rest| rest.split_whitespace().next())
+            .and_then(|kb| kb.parse().ok())
+    }
+
+    /// Single-process, sequential alternative to the chunked-parallel walk for
+    /// when the repository's data does not fit in memory (see
+    /// `pack_exceeds_available_memory`). One `git log` invocation streams the
+    /// whole requested range in commit order, which is the access pattern
+    /// `git bisect` and friends already rely on to keep pack windows warm, then
+    /// this parses that stream into the same `CommitInfo` records the
+    /// chunked-parallel path produces (matching its rename-detection threshold
+    /// and per-file diff-exclude behavior; see `commit_diff` for the
+    /// authoritative semantics this mirrors).
+    async fn analyze_commits_bulk_native(
+        repo_path: &Path,
+        max_commits: usize,
+    ) -> Result<Vec<CommitInfo>> {
+        const RECORD_SEP: char = '\u{1}';
+        const FIELD_SEP: char = '\u{2}';
+        const BODY_END: char = '\u{3}';
+
+        let format = format!(
+            "{RECORD_SEP}%H{FIELD_SEP}%an{FIELD_SEP}%ae{FIELD_SEP}%cn{FIELD_SEP}%ce{FIELD_SEP}%at{FIELD_SEP}%ct{FIELD_SEP}%B{BODY_END}"
+        );
+
+        let output = tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(repo_path)
+            .args([
+                "log",
+                "--no-color",
+                "--patch",
+                "--unified=0",
+                "--find-renames=50%",
+                "-n",
+            ])
+            .arg(max_commits.to_string())
+            .arg(format!("--format={format}"))
+            .arg("HEAD")
+            .kill_on_drop(true)
+            .output()
+            .await
+            .context("failed to spawn `git log` for the bulk sequential scan")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "`git log` exited with {}: {}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Ok(stdout
+            .split(RECORD_SEP)
+            .filter(|record| !record.is_empty())
+            .filter_map(Self::parse_bulk_record)
+            .collect())
+    }
+
+    /// Parses one `RECORD_SEP`-delimited chunk of the bulk `git log` output
+    /// (header fields up to `BODY_END`, then that commit's patch) into a
+    /// `CommitInfo`. Returns `None` for a record too malformed to have a
+    /// commit id, mirroring `build_commit_info`'s "skip unreadable" behavior.
+    fn parse_bulk_record(record: &str) -> Option<CommitInfo> {
+        const FIELD_SEP: char = '\u{2}';
+        const BODY_END: char = '\u{3}';
+
+        let (header, patch) = record.split_once(BODY_END).unwrap_or((record, ""));
+        let mut fields = header.splitn(8, FIELD_SEP);
+
+        let id = fields.next()?.to_string();
+        if id.is_empty() {
+            return None;
+        }
+        let author = fields.next().unwrap_or_default().to_string();
+        let author_email = fields.next().unwrap_or_default().to_string();
+        let committer = fields.next().unwrap_or_default().to_string();
+        let committer_email = fields.next().unwrap_or_default().to_string();
+        let authored_date = Self::parse_unix_timestamp(fields.next())?;
+        let committed_date = Self::parse_unix_timestamp(fields.next())?;
+        let message = fields.next().unwrap_or_default().trim_end().to_string();
+
+        let diff = Self::parse_bulk_patch(patch);
+
+        Some(CommitInfo {
+            id,
+            message,
+            author,
+            author_email,
+            committer,
+            committer_email,
+            authored_date,
+            committed_date,
+            files_changed: diff.files,
+            insertions: diff.insertions,
+            deletions: diff.deletions,
+            branch: None,
+            diff: diff.text,
+        })
+    }
+
+    fn parse_unix_timestamp(field: Option<&str>) -> Option<DateTime<Utc>> {
+        let seconds: i64 = field?.trim().parse().ok()?;
+        Utc.timestamp_opt(seconds, 0).single()
+    }
+
+    /// Extracts the same `CommitDiff` shape `commit_diff` computes from
+    /// libgit2, from one commit's unified-diff text instead. Insertions and
+    /// deletions count every changed line; the accumulated `text` (what the
+    /// signature patterns scan) drops lines from excluded paths, checked once
+    /// per file and cached for that file's remaining lines, exactly like
+    /// `commit_diff`'s per-line callback.
+    fn parse_bulk_patch(patch: &str) -> CommitDiff {
+        let mut result = CommitDiff::default();
+        let mut current_excluded = false;
+        let mut truncated = false;
+
+        for line in patch.lines() {
+            if let Some(path) = Self::diff_header_new_path(line) {
+                if result.files.len() < MAX_FILES_PER_COMMIT {
+                    result.files.push(path.clone());
+                }
+                current_excluded = is_excluded(&path);
+                continue;
+            }
+
+            let is_addition = line.starts_with('+') && !line.starts_with("+++");
+            let is_deletion = line.starts_with('-') && !line.starts_with("---");
+            if !is_addition && !is_deletion {
+                continue;
+            }
+
+            if is_addition {
+                result.insertions += 1;
+            } else {
+                result.deletions += 1;
+            }
+
+            if current_excluded || truncated {
+                continue;
+            }
+
+            result.text.push_str(line);
+            result.text.push('\n');
+            if result.text.len() >= MAX_DIFF_BYTES {
+                result.text.push_str("\n[diff truncated]\n");
+                truncated = true;
+            }
+        }
+
+        result
+    }
+
+    /// Parses a unified-diff file header line (`diff --git a/<old> b/<new>`)
+    /// into the path this file's changed lines should be attributed to,
+    /// preferring the new-side path the way `commit_diff` prefers
+    /// `delta.new_file()`. Returns `None` for any other line.
+    fn diff_header_new_path(line: &str) -> Option<String> {
+        let rest = line.strip_prefix("diff --git a/")?;
+        let (_old, new) = rest.split_once(" b/")?;
+        Some(new.to_string())
+    }
+
     /// Report clone shapes that leave objects missing locally. commitraider
     /// analyzes only what the repository already has and never fetches, so a
     /// partial or shallow clone silently narrows diff coverage unless we say so.
@@ -649,5 +885,125 @@ impl GitAnalyzer {
         } else {
             RepositoryType::Local
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mem_available_kb_reads_the_right_line() {
+        let meminfo = "MemTotal:       32000000 kB\n\
+                        MemFree:         1000000 kB\n\
+                        MemAvailable:   11000000 kB\n\
+                        Buffers:          200000 kB\n";
+        assert_eq!(
+            GitAnalyzer::parse_mem_available_kb(meminfo),
+            Some(11_000_000)
+        );
+    }
+
+    #[test]
+    fn parse_mem_available_kb_missing_line_is_none() {
+        let meminfo = "MemTotal:       32000000 kB\n";
+        assert_eq!(GitAnalyzer::parse_mem_available_kb(meminfo), None);
+    }
+
+    #[test]
+    fn total_pack_bytes_sums_pack_files_only() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let pack_dir = dir.path().join(".git/objects/pack");
+        std::fs::create_dir_all(&pack_dir).expect("mkdir");
+        std::fs::write(pack_dir.join("pack-a.pack"), vec![0u8; 100]).expect("write");
+        std::fs::write(pack_dir.join("pack-a.idx"), vec![0u8; 999]).expect("write");
+        std::fs::write(pack_dir.join("pack-b.pack"), vec![0u8; 50]).expect("write");
+
+        assert_eq!(GitAnalyzer::total_pack_bytes(dir.path()), 150);
+    }
+
+    #[test]
+    fn total_pack_bytes_missing_dir_is_zero() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(GitAnalyzer::total_pack_bytes(dir.path()), 0);
+    }
+
+    #[test]
+    fn diff_header_new_path_extracts_the_new_side() {
+        assert_eq!(
+            GitAnalyzer::diff_header_new_path("diff --git a/old/path.rs b/new/path.rs"),
+            Some("new/path.rs".to_string())
+        );
+        assert_eq!(GitAnalyzer::diff_header_new_path("+some content"), None);
+    }
+
+    #[test]
+    fn parse_bulk_patch_counts_all_lines_but_excludes_text_for_excluded_paths() {
+        let patch = "diff --git a/src/lib.rs b/src/lib.rs\n\
+                      index 000..111 100644\n\
+                      --- a/src/lib.rs\n\
+                      +++ b/src/lib.rs\n\
+                      @@ -1,0 +1,2 @@\n\
+                      +fn added() {}\n\
+                      +fn also_added() {}\n\
+                      diff --git a/package-lock.json b/package-lock.json\n\
+                      index 222..333 100644\n\
+                      --- a/package-lock.json\n\
+                      +++ b/package-lock.json\n\
+                      @@ -1,0 +1,1 @@\n\
+                      +\"excluded\": true\n";
+
+        let diff = GitAnalyzer::parse_bulk_patch(patch);
+
+        assert_eq!(diff.files, vec!["src/lib.rs", "package-lock.json"]);
+        // All +/- lines count, including the excluded file's.
+        assert_eq!(diff.insertions, 3);
+        assert_eq!(diff.deletions, 0);
+        // But only the non-excluded file's content reaches the scanned text.
+        assert!(diff.text.contains("fn added()"));
+        assert!(!diff.text.contains("excluded"));
+    }
+
+    #[test]
+    fn parse_bulk_patch_pure_rename_has_no_content_lines() {
+        let patch = "diff --git a/old_name.rs b/new_name.rs\n\
+                      similarity index 100%\n\
+                      rename from old_name.rs\n\
+                      rename to new_name.rs\n";
+
+        let diff = GitAnalyzer::parse_bulk_patch(patch);
+
+        assert_eq!(diff.files, vec!["new_name.rs"]);
+        assert_eq!(diff.insertions, 0);
+        assert_eq!(diff.deletions, 0);
+        assert!(diff.text.is_empty());
+    }
+
+    #[test]
+    fn parse_bulk_record_extracts_header_fields_and_patch() {
+        // No leading RECORD_SEP: `analyze_commits_bulk_native` splits the raw
+        // `git log` output on it before calling `parse_bulk_record`, so a
+        // record never actually contains one.
+        let record = "abc123\u{2}Jane Doe\u{2}jane@example.com\u{2}\
+                       Jane Doe\u{2}jane@example.com\u{2}1700000000\u{2}1700000100\u{2}\
+                       Fix a bug\n\u{3}diff --git a/src/lib.rs b/src/lib.rs\n\
+                       --- a/src/lib.rs\n+++ b/src/lib.rs\n@@ -1,0 +1,1 @@\n+fixed()\n";
+
+        let info = GitAnalyzer::parse_bulk_record(record).expect("should parse");
+
+        assert_eq!(info.id, "abc123");
+        assert_eq!(info.author, "Jane Doe");
+        assert_eq!(info.author_email, "jane@example.com");
+        assert_eq!(info.message, "Fix a bug");
+        assert_eq!(info.authored_date.timestamp(), 1_700_000_000);
+        assert_eq!(info.committed_date.timestamp(), 1_700_000_100);
+        assert_eq!(info.files_changed, vec!["src/lib.rs"]);
+        assert_eq!(info.insertions, 1);
+        assert!(info.diff.contains("fixed()"));
+    }
+
+    #[test]
+    fn parse_bulk_record_without_commit_id_is_none() {
+        assert!(GitAnalyzer::parse_bulk_record("").is_none());
     }
 }

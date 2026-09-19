@@ -1,5 +1,5 @@
-use super::*;
 use super::complexity::ComplexityCalculator;
+use super::*;
 use anyhow::Result;
 use ignore::Walk;
 use indicatif::{ProgressBar, ProgressStyle};

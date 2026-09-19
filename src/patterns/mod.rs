@@ -526,8 +526,12 @@ pub fn default_patterns() -> Vec<VulnerabilityPattern> {
             // Naming a hash is not a vulnerability. A runtime that implements
             // WebCrypto mentions MD5 and SHA-1 as supported algorithms.
             require_near: vec![
-                "weak".into(), "insecure".into(), "deprecat".into(),
-                "collision".into(), "downgrade".into(), "forbid".into(),
+                "weak".into(),
+                "insecure".into(),
+                "deprecat".into(),
+                "collision".into(),
+                "downgrade".into(),
+                "forbid".into(),
             ],
             ..autovuln(
                 "Weak Cryptography",

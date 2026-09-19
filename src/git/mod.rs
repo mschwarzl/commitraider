@@ -2,7 +2,6 @@ use chrono::{DateTime, Utc};
 use git2::BranchType;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 pub mod analyzer;
 pub mod links;

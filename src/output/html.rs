@@ -1,7 +1,7 @@
 use super::*;
-use crate::patterns::Severity;
 use crate::analysis::CombinedFindings;
 use crate::git::RepositoryLinker;
+use crate::patterns::Severity;
 use crate::patterns::VulnerabilityFinding;
 use anyhow::Result;
 use chrono::Utc;
@@ -39,8 +39,9 @@ impl HtmlGenerator {
             let template_name = file.as_ref();
             let template_content = Templates::get(template_name)
                 .ok_or_else(|| anyhow::anyhow!("Template {} not found", template_name))?;
-            let template_str = std::str::from_utf8(&template_content.data)
-                .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in template {}: {}", template_name, e))?;
+            let template_str = std::str::from_utf8(&template_content.data).map_err(|e| {
+                anyhow::anyhow!("Invalid UTF-8 in template {}: {}", template_name, e)
+            })?;
 
             tera.add_raw_template(template_name, template_str)
                 .map_err(|e| anyhow::anyhow!("Failed to add template {}: {}", template_name, e))?;
@@ -55,8 +56,8 @@ impl HtmlGenerator {
     }
 
     fn load_asset(&self, filename: &str) -> Result<String> {
-        let asset = Assets::get(filename)
-            .ok_or_else(|| anyhow::anyhow!("Asset {} not found", filename))?;
+        let asset =
+            Assets::get(filename).ok_or_else(|| anyhow::anyhow!("Asset {} not found", filename))?;
         let content = std::str::from_utf8(&asset.data)
             .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in asset {}: {}", filename, e))?;
         Ok(content.to_string())
@@ -184,11 +185,7 @@ impl HtmlGenerator {
         context.insert("high_complexity_files", &high_complexity_files);
 
         // All complexity files (sorted by complexity for full analysis)
-        let mut all_complexity_files: Vec<_> = findings
-            .code_stats
-            .file_complexity
-            .iter()
-            .collect();
+        let mut all_complexity_files: Vec<_> = findings.code_stats.file_complexity.iter().collect();
         all_complexity_files.sort_by(|a, b| {
             b.1.cyclomatic_complexity
                 .partial_cmp(&a.1.cyclomatic_complexity)
@@ -556,7 +553,6 @@ impl HtmlGenerator {
         HeatmapData { files, stats }
     }
 
-
     fn get_risk_class(&self, risk_score: f64) -> &'static str {
         if risk_score >= 8.0 {
             "risk-critical"
@@ -568,7 +564,6 @@ impl HtmlGenerator {
             "risk-low"
         }
     }
-
 
     fn calculate_extension_distribution(&self, files: &[String]) -> Vec<serde_json::Value> {
         let mut extension_counts = HashMap::new();

@@ -571,30 +571,29 @@ impl AgentReport {
                 // Compute before the struct partially moves out of `v`.
                 let severity = v.severity();
                 AgentFinding {
-                commit_id: v.commit_id,
-                commit_message: v.commit_message,
-                author: v.author,
-                date: v.date,
-                risk_score: v.risk_score,
-                severity,
-                patterns: v
-                    .patterns_matched
-                    .into_iter()
-                    .map(|p| PatternMatchSummary {
-                        name: p.pattern_name,
-                        severity: p.severity,
-                        category: p.category,
-                        cwe: None, // Could extract from pattern definition if needed
-                        matched_text: p.matched_text,
-                    })
-                    .collect(),
-                cves: v.cve_references,
-                files_changed: v.files_changed,
+                    commit_id: v.commit_id,
+                    commit_message: v.commit_message,
+                    author: v.author,
+                    date: v.date,
+                    risk_score: v.risk_score,
+                    severity,
+                    patterns: v
+                        .patterns_matched
+                        .into_iter()
+                        .map(|p| PatternMatchSummary {
+                            name: p.pattern_name,
+                            severity: p.severity,
+                            category: p.category,
+                            cwe: None, // Could extract from pattern definition if needed
+                            matched_text: p.matched_text,
+                        })
+                        .collect(),
+                    cves: v.cve_references,
+                    files_changed: v.files_changed,
                 }
             })
             .collect()
     }
-
 
     fn extract_risk_files(findings: &CombinedFindings, top_n: usize) -> Vec<RiskFile> {
         let mut risk_files: Vec<RiskFile> = Vec::new();

@@ -15,7 +15,7 @@ pub struct Reporter {
 impl Reporter {
     pub fn new(format: &str, output_path: Option<&str>) -> Result<Self> {
         let format = OutputFormat::from(format);
-        
+
         // For agent-json, None means stdout
         // For html/json, use default if not provided
         let output_path = match output_path {
@@ -44,7 +44,10 @@ impl Reporter {
     ) -> Result<()> {
         // Warn if --compact is used with non-agent-json formats
         if compact && !matches!(self.format, OutputFormat::AgentJson) {
-            tracing::warn!("--compact flag only applies to --output agent-json, ignoring for {:?}", self.format);
+            tracing::warn!(
+                "--compact flag only applies to --output agent-json, ignoring for {:?}",
+                self.format
+            );
         }
 
         match self.format {
@@ -53,26 +56,32 @@ impl Reporter {
                 let content = generator
                     .generate(findings, cve_only, include_stats)
                     .await?;
-                let path = self.output_path.as_ref().expect("HTML output path required");
+                let path = self
+                    .output_path
+                    .as_ref()
+                    .expect("HTML output path required");
                 fs::write(path, content)?;
                 info!("Report saved to {}", path);
             }
             OutputFormat::Json => {
                 let content = serde_json::to_string_pretty(findings)?;
-                let path = self.output_path.as_ref().expect("JSON output path required");
+                let path = self
+                    .output_path
+                    .as_ref()
+                    .expect("JSON output path required");
                 fs::write(path, content)?;
                 info!("Report saved to {}", path);
             }
             OutputFormat::AgentJson => {
                 let content = if compact {
-                    // Use ultra-compact format 
+                    // Use ultra-compact format
                     let compact_report = CompactAgentReport::from_combined_findings(findings);
                     compact_report.generate_json()?
                 } else {
                     let agent_report = AgentReport::from_combined_findings(findings, top_n);
                     agent_report.generate_json()?
                 };
-                
+
                 match &self.output_path {
                     Some(path) => {
                         // Write to file if path specified

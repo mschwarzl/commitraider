@@ -85,7 +85,9 @@ async fn async_main() -> Result<()> {
     }
 
     // Extract repo path early - clap ensures it's Some via required_unless_present
-    let repo = cli.repo.expect("--repo is required when not using --output-schema");
+    let repo = cli
+        .repo
+        .expect("--repo is required when not using --output-schema");
 
     // Initialize logging to stderr so stdout stays clean for data output
     let level = if cli.verbose {
@@ -106,9 +108,9 @@ async fn async_main() -> Result<()> {
     }
 
     // Skip banner for agent-json when outputting to stdout (for clean piping)
-    let skip_banner = matches!(cli.output.as_str(), "agent-json" | "agent") 
-        && cli.output_file.is_none();
-    
+    let skip_banner =
+        matches!(cli.output.as_str(), "agent-json" | "agent") && cli.output_file.is_none();
+
     if !skip_banner {
         println!(
             "{}",
@@ -116,10 +118,7 @@ async fn async_main() -> Result<()> {
                 .bright_cyan()
                 .bold()
         );
-    println!(
-        "Repository: {}",
-        repo.display().to_string().bright_white()
-    );
+        println!("Repository: {}", repo.display().to_string().bright_white());
     }
 
     let config = Config::load()?;
@@ -145,9 +144,7 @@ async fn async_main() -> Result<()> {
     info!("Code analysis completed, preparing vulnerability scan...");
 
     info!("Starting vulnerability pattern scanning...");
-    let vulnerabilities = pattern_engine
-        .scan_repository(&repo, &git_stats)
-        .await?;
+    let vulnerabilities = pattern_engine.scan_repository(&repo, &git_stats).await?;
     info!(
         "Pattern scanning complete, found {} vulnerabilities",
         vulnerabilities.len()

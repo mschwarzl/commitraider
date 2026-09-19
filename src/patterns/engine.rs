@@ -90,7 +90,12 @@ pub fn is_source_file(path: &str) -> bool {
 /// Normalize a commit subject so identical backports across branches collapse
 /// to one key: first line, lowercased, trailing `(#1234)` PR ref stripped.
 fn normalize_subject(message: &str) -> String {
-    let mut line = message.lines().next().unwrap_or("").trim().to_ascii_lowercase();
+    let mut line = message
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
     if let Some(pos) = line.rfind("(#") {
         if line.ends_with(')') {
             line.truncate(pos);
@@ -176,7 +181,10 @@ impl PatternEngine {
             if !pattern.lang_ext.is_empty() {
                 let touches_lang = commit.files_changed.iter().any(|f| {
                     let fl = f.to_ascii_lowercase();
-                    pattern.lang_ext.iter().any(|ext| fl.ends_with(ext.as_str()))
+                    pattern
+                        .lang_ext
+                        .iter()
+                        .any(|ext| fl.ends_with(ext.as_str()))
                 });
                 if !touches_lang {
                     continue;
@@ -322,7 +330,11 @@ impl PatternEngine {
         let mut out = Vec::with_capacity(groups.len());
         for (_key, mut group) in groups {
             // Representative = highest-scoring commit in the cluster.
-            group.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+            group.sort_by(|a, b| {
+                b.risk_score
+                    .partial_cmp(&a.risk_score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let count = group.len();
             let mut rep = group.into_iter().next().unwrap();
             rep.backport_count = count;
@@ -334,7 +346,11 @@ impl PatternEngine {
             out.push(rep);
         }
 
-        out.sort_by(|a, b| b.risk_score.partial_cmp(&a.risk_score).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.risk_score
+                .partial_cmp(&a.risk_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out
     }
 

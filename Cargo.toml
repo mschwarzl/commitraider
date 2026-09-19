@@ -61,8 +61,8 @@ tera = "1.19"
 # Asset embedding
 rust-embed = { version = "8.5", features = ["include-exclude"] }
 
-# [dev-dependencies]
-# Add test dependencies as needed
+[dev-dependencies]
+tempfile = "3.14"
 
 [profile.release]
 codegen-units = 1
