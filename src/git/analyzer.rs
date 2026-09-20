@@ -12,6 +12,7 @@ use tracing::{debug, info, warn};
 pub struct GitAnalyzer {
     repo: Repository,
     path: PathBuf,
+    max_commits: usize,
 }
 
 const MAX_COMMITS_FOR_FULL_ANALYSIS: usize = 20000;
@@ -93,7 +94,14 @@ impl GitAnalyzer {
         Ok(Self {
             repo,
             path: path.to_path_buf(),
+            max_commits: MAX_COMMITS_FOR_FULL_ANALYSIS,
         })
+    }
+
+    /// Override the commit sampling cap (0 disables sampling entirely).
+    pub fn with_max_commits(mut self, max_commits: usize) -> Self {
+        self.max_commits = max_commits;
+        self
     }
 
     pub async fn analyze(&self) -> Result<RepositoryStats> {
@@ -177,15 +185,12 @@ impl GitAnalyzer {
 
         info!("Found {} commits to analyze", commit_oids.len());
 
-        let commit_oids = if commit_oids.len() > MAX_COMMITS_FOR_FULL_ANALYSIS {
+        let commit_oids = if self.max_commits > 0 && commit_oids.len() > self.max_commits {
             info!(
                 "Large repository detected, sampling {} most recent commits for performance",
-                MAX_COMMITS_FOR_FULL_ANALYSIS
+                self.max_commits
             );
-            commit_oids
-                .into_iter()
-                .take(MAX_COMMITS_FOR_FULL_ANALYSIS)
-                .collect()
+            commit_oids.into_iter().take(self.max_commits).collect()
         } else {
             commit_oids
         };

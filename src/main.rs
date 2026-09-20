@@ -56,6 +56,10 @@ struct Cli {
     #[arg(short, long, default_value = "0")]
     threads: usize,
 
+    /// Maximum commits to analyze on large repos, most recent first (0 = no limit, analyze full history)
+    #[arg(long, default_value = "20000")]
+    max_commits: usize,
+
     /// Maximum number of findings and risk files to include in agent-json output
     #[arg(long, default_value = "50")]
     top_n: usize,
@@ -123,7 +127,7 @@ async fn async_main() -> Result<()> {
     let config = Config::load()?;
     let pattern_engine = PatternEngine::new(&cli.patterns)?;
 
-    let git_analyzer = GitAnalyzer::new(&repo)?;
+    let git_analyzer = GitAnalyzer::new(&repo)?.with_max_commits(cli.max_commits);
     let code_analyzer = CodeAnalyzer::new();
     let mut reporter = Reporter::new(&cli.output, cli.output_file.as_deref())?;
 

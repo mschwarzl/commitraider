@@ -45,18 +45,24 @@ impl HtmlGenerator {
         // RFC3339 strings) for display.
         tera.register_filter("date", Self::date_filter);
 
-        // Load templates from embedded resources
+        // Load templates from embedded resources. Added as one batch, not one
+        // `add_raw_template` call per file: `RustEmbed`'s iteration order
+        // isn't guaranteed, and tera 2.x resolves `{% include %}` targets
+        // while adding a template rather than deferring to render time, so
+        // `report.html` (which includes several others) can be added before
+        // its includes exist unless the whole set is resolved together.
+        let mut templates = Vec::new();
         for file in Templates::iter() {
-            let template_name = file.as_ref();
-            let template_content = Templates::get(template_name)
+            let template_name = file.as_ref().to_string();
+            let template_content = Templates::get(&template_name)
                 .ok_or_else(|| anyhow::anyhow!("Template {} not found", template_name))?;
-            let template_str = std::str::from_utf8(&template_content.data).map_err(|e| {
-                anyhow::anyhow!("Invalid UTF-8 in template {}: {}", template_name, e)
-            })?;
-
-            tera.add_raw_template(template_name, template_str)
-                .map_err(|e| anyhow::anyhow!("Failed to add template {}: {}", template_name, e))?;
+            let template_str = std::str::from_utf8(&template_content.data)
+                .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in template {}: {}", template_name, e))?
+                .to_string();
+            templates.push((template_name, template_str));
         }
+        tera.add_raw_templates(templates)
+            .map_err(|e| anyhow::anyhow!("Failed to add templates: {}", e))?;
 
         Ok(Self { tera })
     }
