@@ -724,7 +724,7 @@ impl GitAnalyzer {
 
         let mut promisors = Vec::new();
         if let Ok(remotes) = self.repo.remotes() {
-            for name in remotes.iter().flatten() {
+            for name in remotes.iter().filter_map(|r| r.ok().flatten()) {
                 if config
                     .get_bool(&format!("remote.{}.promisor", name))
                     .unwrap_or(false)
@@ -850,16 +850,16 @@ impl GitAnalyzer {
 
     fn detect_remote_url(&self) -> Option<String> {
         if let Ok(remote) = self.repo.find_remote("origin") {
-            if let Some(url) = remote.url() {
+            if let Ok(url) = remote.url() {
                 return Some(url.to_string());
             }
         }
 
         if let Ok(remotes) = self.repo.remotes() {
             for i in 0..remotes.len() {
-                if let Some(remote_name) = remotes.get(i) {
+                if let Ok(Some(remote_name)) = remotes.get(i) {
                     if let Ok(remote) = self.repo.find_remote(remote_name) {
-                        if let Some(url) = remote.url() {
+                        if let Ok(url) = remote.url() {
                             return Some(url.to_string());
                         }
                     }

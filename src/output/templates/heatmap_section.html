@@ -66,7 +66,7 @@
             <div class="top-files">
                 <h4>Most Changed Files:</h4>
                 <ol>
-                    {% for file_data in heatmap_files | slice(end=10) %}
+                    {% for file_data in heatmap_files[:10] %}
                         <li><code>{{ file_data.path }}</code> - {{ file_data.commit_count }} commits</li>
                     {% endfor %}
                 </ol>

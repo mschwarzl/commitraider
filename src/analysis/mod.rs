@@ -11,7 +11,7 @@ use crate::config::Config;
 use crate::git::RepositoryStats;
 use crate::patterns::VulnerabilityFinding;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CodeStats {
     pub total_lines: usize,
     pub total_files: usize,
@@ -19,19 +19,6 @@ pub struct CodeStats {
     pub file_complexity: HashMap<String, ComplexityMetrics>,
     pub dependency_analysis: DependencyAnalysis,
     pub risk_factors: Vec<RiskFactor>,
-}
-
-impl Default for CodeStats {
-    fn default() -> Self {
-        Self {
-            total_lines: 0,
-            total_files: 0,
-            language_breakdown: HashMap::new(),
-            file_complexity: HashMap::new(),
-            dependency_analysis: DependencyAnalysis::default(),
-            risk_factors: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,23 +41,12 @@ pub struct ComplexityMetrics {
     pub maintainability_index: f64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct DependencyAnalysis {
     pub total_dependencies: usize,
     pub outdated_dependencies: Vec<OutdatedDependency>,
     pub vulnerable_dependencies: Vec<VulnerableDependency>,
     pub license_issues: Vec<LicenseIssue>,
-}
-
-impl Default for DependencyAnalysis {
-    fn default() -> Self {
-        Self {
-            total_dependencies: 0,
-            outdated_dependencies: Vec::new(),
-            vulnerable_dependencies: Vec::new(),
-            license_issues: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

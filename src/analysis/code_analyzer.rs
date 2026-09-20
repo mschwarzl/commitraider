@@ -89,7 +89,7 @@ impl CodeAnalyzer {
 
         for entry in Walk::new(repo_path) {
             let entry = entry?;
-            if entry.file_type().map_or(false, |ft| ft.is_file()) {
+            if entry.file_type().is_some_and(|ft| ft.is_file()) {
                 let path = entry.path();
                 if let Some(extension) = path.extension() {
                     if self.should_analyze_file(extension.to_string_lossy().as_ref()) {
@@ -190,10 +190,10 @@ impl CodeAnalyzer {
         // Read first few bytes to check for null bytes (binary indicator)
         match tokio::fs::read(file_path).await {
             Ok(bytes) => {
-                if bytes.len() > 0 {
+                if !bytes.is_empty() {
                     // Check first 1024 bytes for null bytes
                     let check_len = std::cmp::min(1024, bytes.len());
-                    let contains_null = bytes[..check_len].iter().any(|&b| b == 0);
+                    let contains_null = bytes[..check_len].contains(&0);
                     Ok(contains_null)
                 } else {
                     Ok(false) // Empty files are not binary

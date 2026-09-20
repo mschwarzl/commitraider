@@ -34,6 +34,17 @@ impl HtmlGenerator {
     pub fn new() -> Result<Self> {
         let mut tera = Tera::default();
 
+        // Custom filters must be registered before any template referencing
+        // them is added: tera 2.x validates that a filter exists while
+        // parsing `add_raw_template`, rather than only at render time.
+        tera.register_filter("severity_class", Self::severity_class_filter);
+        tera.register_filter("risk_class", Self::risk_class_filter);
+        tera.register_filter("severity_text", Self::severity_text_filter);
+        // tera 2.x dropped the built-in `date` filter; reimplemented here since
+        // the report templates format `DateTime<Utc>` fields (serialized as
+        // RFC3339 strings) for display.
+        tera.register_filter("date", Self::date_filter);
+
         // Load templates from embedded resources
         for file in Templates::iter() {
             let template_name = file.as_ref();
@@ -47,11 +58,6 @@ impl HtmlGenerator {
                 .map_err(|e| anyhow::anyhow!("Failed to add template {}: {}", template_name, e))?;
         }
 
-        // Add custom filters if needed
-        tera.register_filter("severity_class", Self::severity_class_filter);
-        tera.register_filter("risk_class", Self::risk_class_filter);
-        tera.register_filter("severity_text", Self::severity_text_filter);
-
         Ok(Self { tera })
     }
 
@@ -63,7 +69,11 @@ impl HtmlGenerator {
         Ok(content.to_string())
     }
 
-    fn severity_class_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    fn severity_class_filter(
+        value: &tera::Value,
+        _: tera::Kwargs,
+        _: &tera::State,
+    ) -> tera::TeraResult<tera::Value> {
         let risk_score = value.as_f64().unwrap_or(0.0);
         let class = if risk_score >= 8.0 {
             "severity-critical"
@@ -76,10 +86,14 @@ impl HtmlGenerator {
         } else {
             "severity-info"
         };
-        Ok(Value::String(class.to_string()))
+        Ok(class.into())
     }
 
-    fn risk_class_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    fn risk_class_filter(
+        value: &tera::Value,
+        _: tera::Kwargs,
+        _: &tera::State,
+    ) -> tera::TeraResult<tera::Value> {
         let risk_score = value.as_f64().unwrap_or(0.0);
         let class = if risk_score >= 8.0 {
             "risk-critical"
@@ -90,10 +104,14 @@ impl HtmlGenerator {
         } else {
             "risk-low"
         };
-        Ok(Value::String(class.to_string()))
+        Ok(class.into())
     }
 
-    fn severity_text_filter(value: &Value, _: &HashMap<String, Value>) -> tera::Result<Value> {
+    fn severity_text_filter(
+        value: &tera::Value,
+        _: tera::Kwargs,
+        _: &tera::State,
+    ) -> tera::TeraResult<tera::Value> {
         let risk_score = value.as_f64().unwrap_or(0.0);
         let text = if risk_score >= 8.0 {
             "critical"
@@ -106,7 +124,30 @@ impl HtmlGenerator {
         } else {
             "info"
         };
-        Ok(Value::String(text.to_string()))
+        Ok(text.into())
+    }
+
+    /// Formats an RFC3339 datetime string (chrono's default `Serialize`
+    /// output for `DateTime<Utc>`) with a `strftime`-style pattern, matching
+    /// tera 1.x's built-in `date` filter that 2.x removed. Falls back to
+    /// rendering the value unchanged if it isn't a parseable datetime string.
+    fn date_filter(
+        value: &tera::Value,
+        kwargs: tera::Kwargs,
+        _: &tera::State,
+    ) -> tera::TeraResult<tera::Value> {
+        let Some(raw) = value.as_str() else {
+            return Ok(value.clone());
+        };
+        let format = kwargs
+            .get::<String>("format")
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "%Y-%m-%d".to_string());
+        let formatted = chrono::DateTime::parse_from_rfc3339(raw)
+            .map(|dt| dt.format(&format).to_string())
+            .unwrap_or_else(|_| raw.to_string());
+        Ok(formatted.into())
     }
 
     fn prepare_template_context(
@@ -199,7 +240,7 @@ impl HtmlGenerator {
 
         // Heatmap data with repository links
         let linker = RepositoryLinker::new(&findings.git_stats);
-        let heatmap_data = self.prepare_heatmap_data(&findings, &linker);
+        let heatmap_data = self.prepare_heatmap_data(findings, &linker);
         context.insert("heatmap_files", &heatmap_data.files);
         context.insert("heatmap_stats", &heatmap_data.stats);
 
@@ -412,6 +453,7 @@ impl HtmlGenerator {
                 "patterns_matched": vuln.patterns_matched,
                 "risk_score": vuln.risk_score,
                 "cve_references": vuln.cve_references,
+                "bug_references": vuln.bug_references,
                 "severity_class": format!("severity-{}", vuln.severity().as_str()),
                 "risk_class": self.get_risk_class(vuln.risk_score),
                 "severity_text": vuln.severity().as_str(),

@@ -10,6 +10,16 @@ use tracing::info;
 
 pub struct PatternEngine {
     compiled_patterns: Vec<(Regex, VulnerabilityPattern)>,
+    /// The `Category::Generic` patterns (CVE Reference, Chromium Bug
+    /// Trailer/URL, Security-fix marker), compiled unconditionally regardless
+    /// of `pattern_set`. These are metadata to attach to a finding a *real*
+    /// pattern already qualified, not vulnerability signals of their own, so
+    /// they are matched in a separate pass from `compiled_patterns` and never
+    /// affect whether a commit becomes a finding (see `analyze_commit`).
+    /// Without this split, a bare `Bug: 123456` trailer - present on nearly
+    /// every commit in a tracker-disciplined repo like Chromium - would
+    /// independently qualify almost the entire history as a "finding".
+    reference_patterns: Vec<(Regex, VulnerabilityPattern)>,
 }
 
 /// Max size of the per-finding diff snippet carried into the (compact) agent
@@ -112,22 +122,41 @@ impl PatternEngine {
             "web" | "php" => Self::get_web_patterns(),
             "workerd" | "cpp" => Self::get_workerd_patterns(),
             "autovuln" => Self::get_autovuln_patterns(),
-            "all" => default_patterns(),
+            // Excludes Generic here too: it is never a finding-qualifying
+            // pattern set, only the source `reference_patterns` compiles from
+            // below, regardless of `pattern_set`.
+            "all" => default_patterns()
+                .into_iter()
+                .filter(|p| !matches!(p.category, Category::Generic))
+                .collect(),
             _ => Self::get_vuln_patterns(),
         };
 
         info!("Loading {} vulnerability patterns", patterns.len());
 
-        let compiled_patterns = patterns
+        let compiled_patterns = Self::compile(&patterns)?;
+        let reference_patterns = Self::compile(
+            &default_patterns()
+                .into_iter()
+                .filter(|p| matches!(p.category, Category::Generic))
+                .collect::<Vec<_>>(),
+        )?;
+
+        Ok(Self {
+            compiled_patterns,
+            reference_patterns,
+        })
+    }
+
+    fn compile(patterns: &[VulnerabilityPattern]) -> Result<Vec<(Regex, VulnerabilityPattern)>> {
+        patterns
             .iter()
             .map(|pattern| {
                 let regex = Regex::new(&pattern.pattern)
                     .with_context(|| format!("Failed to compile pattern: {}", pattern.name))?;
                 Ok((regex, pattern.clone()))
             })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(Self { compiled_patterns })
+            .collect()
     }
 
     pub async fn scan_repository(
@@ -168,6 +197,7 @@ impl PatternEngine {
     ) -> Result<Option<VulnerabilityFinding>> {
         let mut patterns_matched = Vec::new();
         let mut cve_references = Vec::new();
+        let mut bug_references = Vec::new();
 
         let message = &commit.message;
         let message_lc = message.to_ascii_lowercase();
@@ -222,11 +252,6 @@ impl PatternEngine {
                 }
 
                 let matched_text = captures.get(0).unwrap().as_str().to_string();
-                if pattern.name == "CVE Reference" {
-                    if let Some(cve_id) = captures.get(1) {
-                        cve_references.push(format!("CVE-{}", cve_id.as_str()));
-                    }
-                }
 
                 patterns_matched.push(PatternMatch {
                     pattern_name: pattern.name.clone(),
@@ -237,6 +262,7 @@ impl PatternEngine {
                     line_number: None,
                     context: (*text).chars().take(400).collect(),
                     cve_references: cve_references.clone(),
+                    bug_references: bug_references.clone(),
                 });
                 break; // one match per pattern is enough
             }
@@ -244,6 +270,33 @@ impl PatternEngine {
 
         if patterns_matched.is_empty() {
             return Ok(None);
+        }
+
+        // Bug/CVE references are metadata to attach to a finding that a
+        // *real* pattern above already qualified, never a signal that
+        // qualifies one on their own (a bare `Bug: 123456` trailer matches
+        // almost every commit in a tracker-disciplined repo like Chromium).
+        for (regex, pattern) in &self.reference_patterns {
+            let Ok(Some(captures)) = regex.captures(message) else {
+                continue;
+            };
+            let Some(id) = captures.get(1) else {
+                continue;
+            };
+            match pattern.name.as_str() {
+                "CVE Reference" => cve_references.push(format!("CVE-{}", id.as_str())),
+                "Chromium Bug Trailer" | "Chromium Bug Tracker URL" => {
+                    let id = id.as_str().to_string();
+                    if !bug_references.contains(&id) {
+                        bug_references.push(id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for pm in &mut patterns_matched {
+            pm.cve_references = cve_references.clone();
+            pm.bug_references = bug_references.clone();
         }
 
         let source_files: usize = commit
@@ -263,6 +316,7 @@ impl PatternEngine {
             patterns_matched,
             risk_score,
             cve_references,
+            bug_references,
             backport_count: 1,
             diff_snippet: diff_snippet(&commit.diff, DIFF_SNIPPET_CHARS),
         }))
@@ -421,5 +475,116 @@ impl PatternEngine {
             .into_iter()
             .filter(|p| !matches!(p.category, Category::Generic))
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::CommitInfo;
+
+    fn commit(message: &str, diff: &str) -> CommitInfo {
+        CommitInfo {
+            id: "abc123".to_string(),
+            message: message.to_string(),
+            author: "Jane Doe".to_string(),
+            author_email: "jane@example.com".to_string(),
+            committer: "Jane Doe".to_string(),
+            committer_email: "jane@example.com".to_string(),
+            authored_date: chrono::Utc::now(),
+            committed_date: chrono::Utc::now(),
+            files_changed: vec!["src/foo.c".to_string()],
+            insertions: 1,
+            deletions: 0,
+            branch: None,
+            diff: diff.to_string(),
+        }
+    }
+
+    #[test]
+    fn memory_safety_pattern_set_still_extracts_bug_references() {
+        // Regression test for the gap this change fixes: every category-scoped
+        // pattern set used to silently drop the Generic-category
+        // reference-extraction patterns (CVE Reference, Chromium Bug
+        // Trailer/URL), so `-p memorysafety` (used for every real scan) never
+        // populated `bug_references` at all.
+        let engine = PatternEngine::new("memorysafety").expect("engine builds");
+        let commit = commit(
+            "Fix use-after-free in Foo::Bar\n\nBug: 1234567\n",
+            "-free(ptr);\n+ptr = nullptr;\n",
+        );
+
+        let finding = engine
+            .analyze_commit(&commit)
+            .expect("analysis succeeds")
+            .expect("commit matches a memory-safety pattern");
+
+        assert_eq!(finding.bug_references, vec!["1234567".to_string()]);
+    }
+
+    #[test]
+    fn extracts_crbug_url_and_bug_trailer_as_one_deduplicated_reference() {
+        let engine = PatternEngine::new("memorysafety").expect("engine builds");
+        let commit = commit(
+            "Fix dangling pointer, see crbug.com/1234567\n\nBug: 1234567\n",
+            "-free(ptr);\n+ptr = nullptr;\n",
+        );
+
+        let finding = engine
+            .analyze_commit(&commit)
+            .expect("analysis succeeds")
+            .expect("commit matches a memory-safety pattern");
+
+        assert_eq!(finding.bug_references, vec!["1234567".to_string()]);
+    }
+
+    #[test]
+    fn extracts_issues_chromium_org_reference() {
+        let engine = PatternEngine::new("memorysafety").expect("engine builds");
+        let commit = commit(
+            "Fix use-after-free\n\nSee https://issues.chromium.org/issues/7654321 for details.\n",
+            "-free(ptr);\n+ptr = nullptr;\n",
+        );
+
+        let finding = engine
+            .analyze_commit(&commit)
+            .expect("analysis succeeds")
+            .expect("commit matches a memory-safety pattern");
+
+        assert_eq!(finding.bug_references, vec!["7654321".to_string()]);
+    }
+
+    #[test]
+    fn no_reference_in_message_leaves_bug_references_empty() {
+        let engine = PatternEngine::new("memorysafety").expect("engine builds");
+        let commit = commit(
+            "Fix use-after-free in Foo::Bar",
+            "-free(ptr);\n+ptr = nullptr;\n",
+        );
+
+        let finding = engine
+            .analyze_commit(&commit)
+            .expect("analysis succeeds")
+            .expect("commit matches a memory-safety pattern");
+
+        assert!(finding.bug_references.is_empty());
+    }
+
+    #[test]
+    fn bug_reference_alone_does_not_qualify_as_a_finding() {
+        // Regression guard: a bare `Bug: 123456` trailer matches nearly every
+        // commit in a tracker-disciplined repo like Chromium. It must only
+        // ever enrich a finding a real vulnerability pattern already
+        // qualified, never qualify one by itself - the exact regression this
+        // change introduced and then fixed before landing.
+        let engine = PatternEngine::new("memorysafety").expect("engine builds");
+        let commit = commit(
+            "Roll third_party/foo from abc123 to def456\n\nBug: 1234567\n",
+            "-  \"revision\": \"abc123\",\n+  \"revision\": \"def456\",\n",
+        );
+
+        let finding = engine.analyze_commit(&commit).expect("analysis succeeds");
+
+        assert!(finding.is_none());
     }
 }

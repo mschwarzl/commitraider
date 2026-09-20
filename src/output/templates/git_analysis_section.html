@@ -10,10 +10,10 @@
             <tr><th>Author</th><th>Commits</th><th>Files Touched</th><th>Last Activity</th></tr>
             {% for contributor in top_contributors %}
                 <tr>
-                    <td>{{ contributor.1.name }}</td>
-                    <td>{{ contributor.1.commits }}</td>
-                    <td>{{ contributor.1.files_touched | length }}</td>
-                    <td>{{ contributor.1.last_commit | date(format="%Y-%m-%d") }}</td>
+                    <td>{{ contributor[1].name }}</td>
+                    <td>{{ contributor[1].commits }}</td>
+                    <td>{{ contributor[1].files_touched | length }}</td>
+                    <td>{{ contributor[1].last_commit | date(format="%Y-%m-%d") }}</td>
                 </tr>
             {% endfor %}
         </table>
@@ -26,7 +26,7 @@
                 <h4>File Types Distribution:</h4>
                 <table style="margin-bottom: 1rem;">
                     <tr><th>Extension</th><th>Count</th><th>Percentage</th></tr>
-                    {% for ext_data in single_author_extensions | slice(end=10) %}
+                    {% for ext_data in single_author_extensions[:10] %}
                         <tr>
                             <td><code>.{{ ext_data.extension }}</code></td>
                             <td>{{ ext_data.count }}</td>
@@ -51,7 +51,7 @@
                 <h4>File Types Distribution:</h4>
                 <table style="margin-bottom: 1rem;">
                     <tr><th>Extension</th><th>Count</th><th>Percentage</th></tr>
-                    {% for ext_data in stale_files_extensions | slice(end=10) %}
+                    {% for ext_data in stale_files_extensions[:10] %}
                         <tr>
                             <td><code>.{{ ext_data.extension }}</code></td>
                             <td>{{ ext_data.count }}</td>

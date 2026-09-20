@@ -101,11 +101,7 @@ impl<'a> RepositoryLinker<'a> {
             let path = captures.get(2)?.as_str();
 
             // Remove .git suffix from path if present
-            let path = if path.ends_with(".git") {
-                &path[..path.len() - 4]
-            } else {
-                path
-            };
+            let path = path.strip_suffix(".git").unwrap_or(path);
 
             Some(format!("https://{}/{}", hostname, path))
         } else {

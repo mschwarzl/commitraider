@@ -233,6 +233,10 @@ pub struct AgentFinding {
     pub severity: Severity,
     pub patterns: Vec<PatternMatchSummary>,
     pub cves: Vec<String>,
+    /// Chromium/crbug tracker IDs referenced by this commit (see
+    /// `VulnerabilityFinding::bug_references`).
+    #[serde(default)]
+    pub bugs: Vec<String>,
     pub files_changed: Vec<String>,
 }
 
@@ -329,6 +333,9 @@ pub struct CompactVulnerability {
     pub pat: Vec<CompactPattern>,
     /// CVE references
     pub cve: Vec<String>,
+    /// Chromium/crbug tracker IDs (see `VulnerabilityFinding::bug_references`)
+    #[serde(default)]
+    pub bug: Vec<String>,
     /// Files changed (just basenames)
     pub files: Vec<String>,
     /// Backport count: how many branches shipped this same fix (>1 = strong CVE signal)
@@ -417,6 +424,7 @@ impl CompactAgentReport {
                     })
                     .collect(),
                 cve: v.cve_references,
+                bug: v.bug_references,
                 files: v
                     .files_changed
                     .into_iter()
@@ -589,6 +597,7 @@ impl AgentReport {
                         })
                         .collect(),
                     cves: v.cve_references,
+                    bugs: v.bug_references,
                     files_changed: v.files_changed,
                 }
             })

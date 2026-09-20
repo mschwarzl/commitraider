@@ -123,6 +123,10 @@ pub struct PatternMatch {
     pub line_number: Option<usize>,
     pub context: String,
     pub cve_references: Vec<String>,
+    /// Chromium/crbug tracker IDs found alongside this match (`Bug:`/`Fixed:`
+    /// trailers, `crbug.com/<id>`, `issues.chromium.org/issues/<id>`).
+    #[serde(default)]
+    pub bug_references: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +139,12 @@ pub struct VulnerabilityFinding {
     pub patterns_matched: Vec<PatternMatch>,
     pub risk_score: f64,
     pub cve_references: Vec<String>,
+    /// Chromium/crbug tracker IDs referenced by this commit, deduplicated
+    /// across its matched patterns. Lets a finding be cross-checked against
+    /// the actual tracked bug (severity, disclosure status, duplicates)
+    /// instead of only the commit message text.
+    #[serde(default)]
+    pub bug_references: Vec<String>,
     /// Number of commits (across branches) sharing this fix. 1 for a normal
     /// commit; >1 when the same fix was backported — a strong CVE signal.
     #[serde(default = "one")]
@@ -661,6 +671,26 @@ pub fn default_patterns() -> Vec<VulnerabilityPattern> {
         msg(
             "Security-fix marker",
             r"(?i)\b(fix\(security\)|security[-\s]fix|GHSA-|hackerone|advisory)\b",
+            Severity::Info,
+            Category::Generic,
+            "",
+        ),
+        // Chromium's own trailer convention (`Bug: 123456`, `Fixed: 123456`),
+        // present on essentially every Chromium/V8 commit and the most
+        // reliable link from a finding back to its tracked bug.
+        msg(
+            "Chromium Bug Trailer",
+            r"(?im)^(?:bug|fixed)\s*:\s*(\d{4,})\s*$",
+            Severity::Info,
+            Category::Generic,
+            "",
+        ),
+        // The two URL forms Chromium has used for its public bug tracker:
+        // legacy crbug.com short links, and the issues.chromium.org tracker
+        // it migrated to (both also reachable via issuetracker.google.com).
+        msg(
+            "Chromium Bug Tracker URL",
+            r"(?i)\b(?:crbug\.com/|issues\.chromium\.org/issues/|issuetracker\.google\.com/issues/)(\d{4,})\b",
             Severity::Info,
             Category::Generic,
             "",

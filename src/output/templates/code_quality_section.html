@@ -59,25 +59,25 @@
                 <tbody id="complexityTableBody">
                     {% for complexity_item in all_complexity_files %}
                         <tr class="complexity-row"
-                            data-filename="{{ complexity_item.0 | lower }}"
-                            data-complexity="{{ complexity_item.1.cyclomatic_complexity }}"
-                            data-cognitive="{{ complexity_item.1.cognitive_complexity }}"
-                            data-functions="{{ complexity_item.1.function_count }}"
-                            data-lines="{{ complexity_item.1.line_count }}"
-                            data-maintainability="{{ complexity_item.1.maintainability_index }}">
-                            <td><code>{{ complexity_item.0 }}</code></td>
+                            data-filename="{{ complexity_item[0] | lower }}"
+                            data-complexity="{{ complexity_item[1].cyclomatic_complexity }}"
+                            data-cognitive="{{ complexity_item[1].cognitive_complexity }}"
+                            data-functions="{{ complexity_item[1].function_count }}"
+                            data-lines="{{ complexity_item[1].line_count }}"
+                            data-maintainability="{{ complexity_item[1].maintainability_index }}">
+                            <td><code>{{ complexity_item[0] }}</code></td>
                             <td class="complexity-value">
-                                {{ complexity_item.1.cyclomatic_complexity | round(precision=1) }}
+                                {{ complexity_item[1].cyclomatic_complexity | round(precision=1) }}
                             </td>
                             <td class="cognitive-complexity">
-                                {{ complexity_item.1.cognitive_complexity | round(precision=1) }}
+                                {{ complexity_item[1].cognitive_complexity | round(precision=1) }}
                             </td>
-                            <td>{{ complexity_item.1.function_count }}</td>
-                            <td>{{ complexity_item.1.line_count }}</td>
+                            <td>{{ complexity_item[1].function_count }}</td>
+                            <td>{{ complexity_item[1].line_count }}</td>
                             <td class="maintainability-index">
                                 <div class="maintainability-bar">
-                                    <div class="maintainability-fill" style="width: {{ complexity_item.1.maintainability_index }}%"></div>
-                                    <span>{{ complexity_item.1.maintainability_index | round(precision=0) }}%</span>
+                                    <div class="maintainability-fill" style="width: {{ complexity_item[1].maintainability_index }}%"></div>
+                                    <span>{{ complexity_item[1].maintainability_index | round(precision=0) }}%</span>
                                 </div>
                             </td>
                         </tr>

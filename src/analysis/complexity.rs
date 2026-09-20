@@ -619,11 +619,10 @@ impl ComplexityCalculator {
         let nesting_penalty = nesting_level.max(0) as f64;
 
         // Control flow structures (base increment + nesting penalty)
-        if line.contains("if ") && !line.contains("else if") {
-            increment += 1.0 + nesting_penalty;
-        } else if line.contains("else if") || line.contains("elif ") {
-            increment += 1.0 + nesting_penalty;
-        } else if line.contains("else") && !line.contains("if") {
+        let is_branch = line.contains("if ")
+            || line.contains("elif ")
+            || (line.contains("else") && !line.contains("if"));
+        if is_branch {
             increment += 1.0 + nesting_penalty;
         }
 
@@ -732,6 +731,6 @@ impl ComplexityCalculator {
         let maintainability =
             171.0 - 5.2 * halstead_volume.ln() - 0.23 * complexity - 16.2 * (lines as f64).ln();
 
-        maintainability.max(0.0).min(100.0)
+        maintainability.clamp(0.0, 100.0)
     }
 }
