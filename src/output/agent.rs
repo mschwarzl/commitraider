@@ -84,6 +84,7 @@ pub const JSON_SCHEMA: &str = r#"{
           "date": { "type": "string", "format": "date-time" },
           "risk_score": { "type": "number", "minimum": 0, "maximum": 10 },
           "severity": { "type": "string", "enum": ["Critical", "High", "Medium", "Low", "Info"] },
+          "diff": { "type": "string", "description": "Changed-lines diff snippet, source files only" },
           "patterns": {
             "type": "array",
             "items": {
@@ -238,6 +239,11 @@ pub struct AgentFinding {
     #[serde(default)]
     pub bugs: Vec<String>,
     pub files_changed: Vec<String>,
+    /// Changed-lines diff snippet (source files only, capped), as the compact report
+    /// carries. It is the only part of a finding that shows the code that was wrong,
+    /// so a consumer triaging without it has to re-read the commit itself.
+    #[serde(default)]
+    pub diff: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -369,9 +375,12 @@ pub struct CompactRiskFile {
 }
 
 impl CompactAgentReport {
-    pub fn from_combined_findings(findings: &CombinedFindings) -> Self {
+    pub fn from_combined_findings(findings: &CombinedFindings, top_n: usize) -> Self {
         let summary = AgentReport::calculate_summary(findings);
-        let vulns = Self::extract_compact_vulns(findings, 15);
+        // findings arrive sorted by risk score, so a fixed cap here silently dropped
+        // everything below the top 15 whatever --top-n asked for, which on a repo with
+        // many Critical commits meant no High finding was ever reported
+        let vulns = Self::extract_compact_vulns(findings, top_n);
         let risk_files = Self::extract_compact_risk_files(findings, 10);
 
         // Use only the basename to avoid leaking absolute filesystem paths
@@ -598,6 +607,7 @@ impl AgentReport {
                         .collect(),
                     cves: v.cve_references,
                     bugs: v.bug_references,
+                    diff: v.diff_snippet,
                     files_changed: v.files_changed,
                 }
             })
