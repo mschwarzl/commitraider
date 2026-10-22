@@ -344,6 +344,18 @@ pub fn default_patterns() -> Vec<VulnerabilityPattern> {
             Category::MemorySafety,
             "CWE-120",
         ),
+        // Maintainers fixing a bounds bug rarely name the bug class. They write
+        // "strengthen len checks" or "validate frame length". The patterns above match
+        // the vocabulary of a vulnerability report; this one matches the vocabulary of a
+        // fix, which is what most security commits actually look like when no advisory
+        // was ever filed. Misspellings of "strengthen" are deliberate: they occur.
+        msg(
+            "Bounds Check Hardening",
+            r"(?i)\b(?:(?:strength?en|strenghten|streng?then|harden|tighten|improve|add|enforce|fix|validate|check)\w*\s+(?:\w+\s+){0,3}(?:bounds?|len(?:gth)?|size|offset|range|overflow)\s*(?:check|validation|sanity)?|(?:bounds?|len(?:gth)?|size|range)\s+(?:sanity\s+)?check|sanity[-\s]check\w*|missing\s+(?:bounds?|len(?:gth)?|size|range)\s+check|(?:strength?en|strenghten|streng?then|harden|tighten)\w*\s+(?:\w+\s+){0,2}(?:check|validation)s?|validat\w+\s+(?:\w+\s+){0,3}(?:sequenc\w+|framing|boundar\w+))\b",
+            Severity::High,
+            Category::MemorySafety,
+            "CWE-1284",
+        ),
         msg(
             "Out-of-Bounds Access",
             r"(?i)\b(out[-\s]of[-\s]bounds|\boob\b|index[-\s]out[-\s]of[-\s]range)\b",

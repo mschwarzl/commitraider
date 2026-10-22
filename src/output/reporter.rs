@@ -75,7 +75,7 @@ impl Reporter {
             OutputFormat::AgentJson => {
                 let content = if compact {
                     // Use ultra-compact format
-                    let compact_report = CompactAgentReport::from_combined_findings(findings);
+                    let compact_report = CompactAgentReport::from_combined_findings(findings, top_n);
                     compact_report.generate_json()?
                 } else {
                     let agent_report = AgentReport::from_combined_findings(findings, top_n);
